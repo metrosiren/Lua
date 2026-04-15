@@ -1,0 +1,2189 @@
+--[[
+    ╔═══════════════════════════════════════════════════════════════════════╗
+    ║                        NexusUI  v2.0                                ║
+    ║          A sleek, modern, fully-customizable UI library             ║
+    ║                        for Roblox Luau                              ║
+    ╠═══════════════════════════════════════════════════════════════════════╣
+    ║  Components:                                                        ║
+    ║    • Window / Page        • Button          • Toggle                ║
+    ║    • Dropdown             • TextBox         • Slider                ║
+    ║    • Label                • Divider         • Modal                 ║
+    ║    • Notification         • Tab System      • ColorPicker           ║
+    ║    • Keybind              • ProgressBar     • ScrollFrame           ║
+    ╚═══════════════════════════════════════════════════════════════════════╝
+
+    Usage:
+        local NexusUI = require(path.to.NexusUI)
+        local ui = NexusUI.new({
+            Title = "My Menu",
+            Theme = "Dark",        -- "Dark" | "Light" | "Midnight" | "Ember" | custom table
+            AccentColor = Color3.fromRGB(88, 101, 242),
+            Font = Enum.Font.GothamBold,
+            ToggleKey = Enum.KeyCode.RightControl,
+        })
+
+        local page = ui:CreatePage({ Name = "Home", Icon = "rbxassetid://0" })
+        page:CreateButton({ Text = "Click Me", Callback = function() print("Clicked!") end })
+        page:CreateToggle({ Text = "Auto Farm", Default = false, Callback = function(v) end })
+        page:CreateSlider({ Text = "Speed", Min = 0, Max = 100, Default = 16, Callback = function(v) end })
+        page:CreateDropdown({ Text = "Mode", Options = {"A","B","C"}, Default = "A", Callback = function(v) end })
+        page:CreateTextBox({ Text = "Username", Placeholder = "Enter name...", Callback = function(v) end })
+--]]
+
+-- ══════════════════════════════════════════════════════════════
+--  Services
+-- ══════════════════════════════════════════════════════════════
+
+local Players            = game:GetService("Players")
+local TweenService       = game:GetService("TweenService")
+local UserInputService   = game:GetService("UserInputService")
+local RunService         = game:GetService("RunService")
+local TextService        = game:GetService("TextService")
+
+local Player    = Players.LocalPlayer
+local Mouse     = Player:GetMouse()
+
+-- ══════════════════════════════════════════════════════════════
+--  Themes
+-- ══════════════════════════════════════════════════════════════
+
+local Themes = {
+    Dark = {
+        Background      = Color3.fromRGB(18, 18, 24),
+        Surface         = Color3.fromRGB(25, 25, 35),
+        SurfaceAlt      = Color3.fromRGB(32, 32, 45),
+        Border          = Color3.fromRGB(45, 45, 60),
+        Text            = Color3.fromRGB(235, 235, 245),
+        TextDim         = Color3.fromRGB(155, 155, 175),
+        Accent          = Color3.fromRGB(88, 101, 242),
+        AccentHover     = Color3.fromRGB(108, 121, 255),
+        Success         = Color3.fromRGB(67, 181, 129),
+        Warning         = Color3.fromRGB(250, 168, 26),
+        Error           = Color3.fromRGB(237, 66, 69),
+        Shadow          = Color3.fromRGB(0, 0, 0),
+        Glow            = Color3.fromRGB(88, 101, 242),
+    },
+    Light = {
+        Background      = Color3.fromRGB(245, 245, 250),
+        Surface         = Color3.fromRGB(255, 255, 255),
+        SurfaceAlt      = Color3.fromRGB(238, 238, 245),
+        Border          = Color3.fromRGB(210, 210, 225),
+        Text            = Color3.fromRGB(25, 25, 35),
+        TextDim         = Color3.fromRGB(105, 105, 125),
+        Accent          = Color3.fromRGB(75, 85, 220),
+        AccentHover     = Color3.fromRGB(95, 105, 240),
+        Success         = Color3.fromRGB(55, 160, 110),
+        Warning         = Color3.fromRGB(230, 150, 20),
+        Error           = Color3.fromRGB(220, 55, 60),
+        Shadow          = Color3.fromRGB(180, 180, 195),
+        Glow            = Color3.fromRGB(75, 85, 220),
+    },
+    Midnight = {
+        Background      = Color3.fromRGB(10, 10, 18),
+        Surface         = Color3.fromRGB(16, 16, 28),
+        SurfaceAlt      = Color3.fromRGB(22, 22, 38),
+        Border          = Color3.fromRGB(35, 35, 55),
+        Text            = Color3.fromRGB(220, 225, 240),
+        TextDim         = Color3.fromRGB(120, 125, 155),
+        Accent          = Color3.fromRGB(130, 80, 255),
+        AccentHover     = Color3.fromRGB(155, 105, 255),
+        Success         = Color3.fromRGB(80, 200, 140),
+        Warning         = Color3.fromRGB(255, 180, 40),
+        Error           = Color3.fromRGB(255, 75, 85),
+        Shadow          = Color3.fromRGB(0, 0, 0),
+        Glow            = Color3.fromRGB(130, 80, 255),
+    },
+    Ember = {
+        Background      = Color3.fromRGB(20, 14, 12),
+        Surface         = Color3.fromRGB(30, 22, 18),
+        SurfaceAlt      = Color3.fromRGB(42, 30, 24),
+        Border          = Color3.fromRGB(60, 42, 32),
+        Text            = Color3.fromRGB(245, 235, 225),
+        TextDim         = Color3.fromRGB(175, 150, 135),
+        Accent          = Color3.fromRGB(255, 100, 50),
+        AccentHover     = Color3.fromRGB(255, 130, 75),
+        Success         = Color3.fromRGB(100, 200, 120),
+        Warning         = Color3.fromRGB(255, 190, 50),
+        Error           = Color3.fromRGB(255, 70, 70),
+        Shadow          = Color3.fromRGB(0, 0, 0),
+        Glow            = Color3.fromRGB(255, 100, 50),
+    },
+}
+
+-- ══════════════════════════════════════════════════════════════
+--  Utility Functions
+-- ══════════════════════════════════════════════════════════════
+
+local Util = {}
+
+function Util.Tween(instance: GuiObject, duration: number, properties: {[string]: any}, style: Enum.EasingStyle?, direction: Enum.EasingDirection?)
+    local tween = TweenService:Create(
+        instance,
+        TweenInfo.new(
+            duration,
+            style or Enum.EasingStyle.Quint,
+            direction or Enum.EasingDirection.Out
+        ),
+        properties
+    )
+    tween:Play()
+    return tween
+end
+
+function Util.Create(class: string, properties: {[string]: any}, children: {Instance}?): Instance
+    local inst = Instance.new(class)
+    for k, v in pairs(properties) do
+        if k ~= "Parent" then
+            (inst :: any)[k] = v
+        end
+    end
+    if children then
+        for _, child in ipairs(children) do
+            child.Parent = inst
+        end
+    end
+    if properties.Parent then
+        inst.Parent = properties.Parent
+    end
+    return inst
+end
+
+function Util.Corner(parent: GuiObject, radius: number): UICorner
+    return Util.Create("UICorner", {
+        CornerRadius = UDim.new(0, radius),
+        Parent = parent,
+    }) :: UICorner
+end
+
+function Util.Stroke(parent: GuiObject, color: Color3, thickness: number?, transparency: number?): UIStroke
+    return Util.Create("UIStroke", {
+        Color = color,
+        Thickness = thickness or 1,
+        Transparency = transparency or 0.5,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+        Parent = parent,
+    }) :: UIStroke
+end
+
+function Util.Padding(parent: GuiObject, top: number?, bottom: number?, left: number?, right: number?): UIPadding
+    return Util.Create("UIPadding", {
+        PaddingTop    = UDim.new(0, top or 0),
+        PaddingBottom = UDim.new(0, bottom or 0),
+        PaddingLeft   = UDim.new(0, left or 0),
+        PaddingRight  = UDim.new(0, right or 0),
+        Parent = parent,
+    }) :: UIPadding
+end
+
+function Util.ListLayout(parent: GuiObject, padding: number?, direction: Enum.FillDirection?, hAlign: Enum.HorizontalAlignment?, vAlign: Enum.VerticalAlignment?): UIListLayout
+    return Util.Create("UIListLayout", {
+        Padding       = UDim.new(0, padding or 6),
+        FillDirection = direction or Enum.FillDirection.Vertical,
+        HorizontalAlignment = hAlign or Enum.HorizontalAlignment.Center,
+        VerticalAlignment   = vAlign or Enum.VerticalAlignment.Top,
+        SortOrder     = Enum.SortOrder.LayoutOrder,
+        Parent        = parent,
+    }) :: UIListLayout
+end
+
+function Util.Shadow(parent: GuiObject, color: Color3, size: number?): ImageLabel
+    return Util.Create("ImageLabel", {
+        Name = "Shadow",
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, 0, 0.5, 4),
+        Size = UDim2.new(1, size or 30, 1, size or 30),
+        BackgroundTransparency = 1,
+        Image = "rbxassetid://6015897843",
+        ImageColor3 = color,
+        ImageTransparency = 0.5,
+        ScaleType = Enum.ScaleType.Slice,
+        SliceCenter = Rect.new(49, 49, 450, 450),
+        ZIndex = 0,
+        Parent = parent,
+    }) :: ImageLabel
+end
+
+function Util.Ripple(button: GuiObject, posX: number, posY: number, color: Color3)
+    local ripple = Util.Create("Frame", {
+        Name = "Ripple",
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0, posX, 0, posY),
+        Size = UDim2.new(0, 0, 0, 0),
+        BackgroundColor3 = color,
+        BackgroundTransparency = 0.7,
+        BorderSizePixel = 0,
+        ZIndex = 10,
+        Parent = button,
+    })
+    Util.Corner(ripple, 999)
+
+    local maxSize = math.max(button.AbsoluteSize.X, button.AbsoluteSize.Y) * 2.5
+    local tween = Util.Tween(ripple, 0.5, {
+        Size = UDim2.new(0, maxSize, 0, maxSize),
+        BackgroundTransparency = 1,
+    }, Enum.EasingStyle.Quad)
+    tween.Completed:Connect(function()
+        ripple:Destroy()
+    end)
+end
+
+function Util.MakeDraggable(frame: GuiObject, handle: GuiObject?)
+    local dragToggle, dragStart, startPos = nil, nil, nil
+    local target = handle or frame
+
+    target.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragToggle = true
+            dragStart = input.Position
+            startPos = frame.Position
+
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragToggle = false
+                end
+            end)
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if dragToggle and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            local newPos = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+            Util.Tween(frame, 0.08, { Position = newPos }, Enum.EasingStyle.Linear)
+        end
+    end)
+end
+
+function Util.DeepCopy(t: {[any]: any}): {[any]: any}
+    local copy = {}
+    for k, v in pairs(t) do
+        if type(v) == "table" then
+            copy[k] = Util.DeepCopy(v)
+        else
+            copy[k] = v
+        end
+    end
+    return copy
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  NexusUI Module
+-- ══════════════════════════════════════════════════════════════
+
+local NexusUI = {}
+NexusUI.__index = NexusUI
+
+export type NexusConfig = {
+    Title: string?,
+    Subtitle: string?,
+    Theme: (string | {[string]: Color3})?,
+    AccentColor: Color3?,
+    Font: Enum.Font?,
+    TitleFont: Enum.Font?,
+    CornerRadius: number?,
+    ToggleKey: Enum.KeyCode?,
+    WindowSize: UDim2?,
+    AnimationSpeed: number?,
+    SoundEnabled: boolean?,
+    NotificationDuration: number?,
+    Watermark: string?,
+}
+
+export type PageConfig = {
+    Name: string,
+    Icon: string?,
+    LayoutOrder: number?,
+}
+
+export type ButtonConfig = {
+    Text: string,
+    Description: string?,
+    Icon: string?,
+    Callback: (() -> ())?,
+    LayoutOrder: number?,
+    Disabled: boolean?,
+}
+
+export type ToggleConfig = {
+    Text: string,
+    Description: string?,
+    Default: boolean?,
+    Callback: ((boolean) -> ())?,
+    Flag: string?,
+    LayoutOrder: number?,
+}
+
+export type SliderConfig = {
+    Text: string,
+    Description: string?,
+    Min: number?,
+    Max: number?,
+    Default: number?,
+    Increment: number?,
+    Suffix: string?,
+    Callback: ((number) -> ())?,
+    Flag: string?,
+    LayoutOrder: number?,
+}
+
+export type DropdownConfig = {
+    Text: string,
+    Description: string?,
+    Options: { string },
+    Default: string?,
+    Multi: boolean?,
+    Callback: ((any) -> ())?,
+    Flag: string?,
+    LayoutOrder: number?,
+}
+
+export type TextBoxConfig = {
+    Text: string,
+    Description: string?,
+    Placeholder: string?,
+    Default: string?,
+    ClearOnFocus: boolean?,
+    Callback: ((string) -> ())?,
+    Flag: string?,
+    LayoutOrder: number?,
+}
+
+export type LabelConfig = {
+    Text: string,
+    Description: string?,
+    Icon: string?,
+    LayoutOrder: number?,
+}
+
+export type KeybindConfig = {
+    Text: string,
+    Description: string?,
+    Default: Enum.KeyCode?,
+    Callback: ((Enum.KeyCode) -> ())?,
+    Flag: string?,
+    LayoutOrder: number?,
+}
+
+export type ColorPickerConfig = {
+    Text: string,
+    Description: string?,
+    Default: Color3?,
+    Callback: ((Color3) -> ())?,
+    Flag: string?,
+    LayoutOrder: number?,
+}
+
+export type ProgressBarConfig = {
+    Text: string,
+    Description: string?,
+    Default: number?,
+    LayoutOrder: number?,
+}
+
+-- ══════════════════════════════════════════════════════════════
+--  Constructor
+-- ══════════════════════════════════════════════════════════════
+
+function NexusUI.new(config: NexusConfig?)
+    local self = setmetatable({}, NexusUI)
+
+    config = config or {}
+    self._title       = config.Title or "NexusUI"
+    self._subtitle    = config.Subtitle or "v2.0"
+    self._font        = config.Font or Enum.Font.Gotham
+    self._titleFont   = config.TitleFont or Enum.Font.GothamBold
+    self._cornerR     = config.CornerRadius or 8
+    self._toggleKey   = config.ToggleKey or Enum.KeyCode.RightControl
+    self._windowSize  = config.WindowSize or UDim2.new(0, 520, 0, 380)
+    self._animSpeed   = config.AnimationSpeed or 0.35
+    self._soundOn     = config.SoundEnabled ~= false
+    self._notifDur    = config.NotificationDuration or 3
+    self._watermark   = config.Watermark
+    self._visible     = true
+    self._pages       = {}
+    self._activePage  = nil
+    self._flags       = {}
+    self._connections  = {}
+
+    -- Resolve theme
+    if type(config.Theme) == "table" then
+        self._theme = config.Theme :: {[string]: Color3}
+    elseif type(config.Theme) == "string" then
+        self._theme = Util.DeepCopy(Themes[config.Theme] or Themes.Dark)
+    else
+        self._theme = Util.DeepCopy(Themes.Dark)
+    end
+
+    if config.AccentColor then
+        self._theme.Accent = config.AccentColor
+        self._theme.Glow   = config.AccentColor
+        -- Generate a lighter hover variant
+        local r, g, b = config.AccentColor.R, config.AccentColor.G, config.AccentColor.B
+        self._theme.AccentHover = Color3.new(
+            math.min(r + 0.08, 1),
+            math.min(g + 0.08, 1),
+            math.min(b + 0.08, 1)
+        )
+    end
+
+    self:_BuildUI()
+    self:_SetupInputHandlers()
+
+    return self
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Core UI Construction
+-- ══════════════════════════════════════════════════════════════
+
+function NexusUI:_BuildUI()
+    local theme = self._theme
+
+    -- ScreenGui
+    self._screenGui = Util.Create("ScreenGui", {
+        Name = "NexusUI",
+        ResetOnSpawn = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        DisplayOrder = 999,
+        IgnoreGuiInset = true,
+        Parent = Player:WaitForChild("PlayerGui"),
+    })
+
+    -- Main Container (for centering + animation)
+    self._container = Util.Create("Frame", {
+        Name = "Container",
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+        Size = self._windowSize,
+        BackgroundTransparency = 1,
+        Parent = self._screenGui,
+    })
+
+    -- Drop shadow
+    Util.Shadow(self._container, theme.Shadow, 50)
+
+    -- Window frame
+    self._window = Util.Create("Frame", {
+        Name = "Window",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundColor3 = theme.Background,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+        Parent = self._container,
+    })
+    Util.Corner(self._window, self._cornerR + 2)
+    Util.Stroke(self._window, theme.Border, 1, 0.6)
+
+    -- ────────── Top Bar ──────────
+    self._topBar = Util.Create("Frame", {
+        Name = "TopBar",
+        Size = UDim2.new(1, 0, 0, 44),
+        BackgroundColor3 = theme.Surface,
+        BorderSizePixel = 0,
+        Parent = self._window,
+    })
+    -- Top-only corners via clipping trick
+    local topCornerClip = Util.Create("Frame", {
+        Name = "CornerClip",
+        Position = UDim2.new(0, 0, 0.5, 0),
+        Size = UDim2.new(1, 0, 0.5, 0),
+        BackgroundColor3 = theme.Surface,
+        BorderSizePixel = 0,
+        Parent = self._topBar,
+    })
+    Util.Corner(self._topBar, self._cornerR + 2)
+
+    -- Subtle bottom border on top bar
+    Util.Create("Frame", {
+        Name = "BottomLine",
+        Position = UDim2.new(0, 0, 1, -1),
+        Size = UDim2.new(1, 0, 0, 1),
+        BackgroundColor3 = theme.Border,
+        BackgroundTransparency = 0.5,
+        BorderSizePixel = 0,
+        Parent = self._topBar,
+    })
+
+    -- Accent glow line at very top
+    self._glowLine = Util.Create("Frame", {
+        Name = "GlowLine",
+        Size = UDim2.new(1, 0, 0, 2),
+        BackgroundColor3 = theme.Accent,
+        BorderSizePixel = 0,
+        Parent = self._topBar,
+    })
+    Util.Corner(self._glowLine, 1)
+
+    -- Title
+    Util.Create("TextLabel", {
+        Name = "Title",
+        Position = UDim2.new(0, 16, 0, 0),
+        Size = UDim2.new(0.5, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Text = self._title,
+        TextColor3 = theme.Text,
+        TextSize = 16,
+        Font = self._titleFont,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = self._topBar,
+    })
+
+    -- Subtitle / version badge
+    if self._subtitle then
+        local badge = Util.Create("TextLabel", {
+            Name = "Badge",
+            AnchorPoint = Vector2.new(0, 0.5),
+            Position = UDim2.new(0, 16 + #self._title * 9 + 8, 0.5, 0),
+            Size = UDim2.new(0, 0, 0, 18),
+            AutomaticSize = Enum.AutomaticSize.X,
+            BackgroundColor3 = theme.Accent,
+            BackgroundTransparency = 0.85,
+            Text = " " .. self._subtitle .. " ",
+            TextColor3 = theme.Accent,
+            TextSize = 10,
+            Font = self._font,
+            BorderSizePixel = 0,
+            Parent = self._topBar,
+        })
+        Util.Corner(badge, 4)
+    end
+
+    -- Close / minimize buttons
+    local btnContainer = Util.Create("Frame", {
+        Name = "WindowBtns",
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -10, 0.5, 0),
+        Size = UDim2.new(0, 60, 0, 24),
+        BackgroundTransparency = 1,
+        Parent = self._topBar,
+    })
+    Util.ListLayout(btnContainer, 6, Enum.FillDirection.Horizontal, Enum.HorizontalAlignment.Right, Enum.VerticalAlignment.Center)
+
+    -- Minimize
+    local minimizeBtn = Util.Create("TextButton", {
+        Name = "Minimize",
+        Size = UDim2.new(0, 24, 0, 24),
+        BackgroundColor3 = theme.SurfaceAlt,
+        BackgroundTransparency = 0.5,
+        Text = "─",
+        TextColor3 = theme.TextDim,
+        TextSize = 12,
+        Font = self._font,
+        BorderSizePixel = 0,
+        AutoButtonColor = false,
+        Parent = btnContainer,
+    })
+    Util.Corner(minimizeBtn, 6)
+    minimizeBtn.MouseButton1Click:Connect(function()
+        self:Toggle()
+    end)
+    minimizeBtn.MouseEnter:Connect(function()
+        Util.Tween(minimizeBtn, 0.2, { BackgroundTransparency = 0, TextColor3 = theme.Text })
+    end)
+    minimizeBtn.MouseLeave:Connect(function()
+        Util.Tween(minimizeBtn, 0.2, { BackgroundTransparency = 0.5, TextColor3 = theme.TextDim })
+    end)
+
+    -- Close
+    local closeBtn = Util.Create("TextButton", {
+        Name = "Close",
+        Size = UDim2.new(0, 24, 0, 24),
+        BackgroundColor3 = theme.Error,
+        BackgroundTransparency = 0.8,
+        Text = "×",
+        TextColor3 = theme.TextDim,
+        TextSize = 16,
+        Font = self._font,
+        BorderSizePixel = 0,
+        AutoButtonColor = false,
+        Parent = btnContainer,
+    })
+    Util.Corner(closeBtn, 6)
+    closeBtn.MouseButton1Click:Connect(function()
+        self:Destroy()
+    end)
+    closeBtn.MouseEnter:Connect(function()
+        Util.Tween(closeBtn, 0.2, { BackgroundTransparency = 0, TextColor3 = Color3.new(1,1,1) })
+    end)
+    closeBtn.MouseLeave:Connect(function()
+        Util.Tween(closeBtn, 0.2, { BackgroundTransparency = 0.8, TextColor3 = theme.TextDim })
+    end)
+
+    -- Make draggable via top bar
+    Util.MakeDraggable(self._container, self._topBar)
+
+    -- ────────── Body Area ──────────
+    self._body = Util.Create("Frame", {
+        Name = "Body",
+        Position = UDim2.new(0, 0, 0, 44),
+        Size = UDim2.new(1, 0, 1, -44),
+        BackgroundTransparency = 1,
+        Parent = self._window,
+    })
+
+    -- ────────── Sidebar (Tab Navigation) ──────────
+    self._sidebar = Util.Create("Frame", {
+        Name = "Sidebar",
+        Size = UDim2.new(0, 130, 1, 0),
+        BackgroundColor3 = theme.Surface,
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Parent = self._body,
+    })
+    -- Right border
+    Util.Create("Frame", {
+        Name = "Border",
+        AnchorPoint = Vector2.new(1, 0),
+        Position = UDim2.new(1, 0, 0, 0),
+        Size = UDim2.new(0, 1, 1, 0),
+        BackgroundColor3 = theme.Border,
+        BackgroundTransparency = 0.5,
+        BorderSizePixel = 0,
+        Parent = self._sidebar,
+    })
+
+    self._tabHolder = Util.Create("ScrollingFrame", {
+        Name = "Tabs",
+        Position = UDim2.new(0, 0, 0, 8),
+        Size = UDim2.new(1, 0, 1, -8),
+        BackgroundTransparency = 1,
+        ScrollBarThickness = 0,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        BorderSizePixel = 0,
+        Parent = self._sidebar,
+    })
+    Util.Padding(self._tabHolder, 4, 4, 8, 8)
+    Util.ListLayout(self._tabHolder, 4)
+
+    -- ────────── Content Area ──────────
+    self._contentArea = Util.Create("Frame", {
+        Name = "Content",
+        Position = UDim2.new(0, 130, 0, 0),
+        Size = UDim2.new(1, -130, 1, 0),
+        BackgroundTransparency = 1,
+        ClipsDescendants = true,
+        Parent = self._body,
+    })
+
+    -- ────────── Notification Container ──────────
+    self._notifContainer = Util.Create("Frame", {
+        Name = "Notifications",
+        AnchorPoint = Vector2.new(1, 1),
+        Position = UDim2.new(1, -20, 1, -20),
+        Size = UDim2.new(0, 280, 0, 400),
+        BackgroundTransparency = 1,
+        Parent = self._screenGui,
+    })
+    Util.ListLayout(self._notifContainer, 8, Enum.FillDirection.Vertical, Enum.HorizontalAlignment.Right, Enum.VerticalAlignment.Bottom)
+
+    -- ────────── Watermark ──────────
+    if self._watermark then
+        local wm = Util.Create("TextLabel", {
+            Name = "Watermark",
+            AnchorPoint = Vector2.new(1, 0),
+            Position = UDim2.new(1, -16, 0, 12),
+            Size = UDim2.new(0, 0, 0, 22),
+            AutomaticSize = Enum.AutomaticSize.X,
+            BackgroundColor3 = theme.Surface,
+            BackgroundTransparency = 0.2,
+            Text = "  " .. self._watermark .. "  ",
+            TextColor3 = theme.TextDim,
+            TextSize = 11,
+            Font = self._font,
+            BorderSizePixel = 0,
+            Parent = self._screenGui,
+        })
+        Util.Corner(wm, 6)
+        Util.Stroke(wm, theme.Border, 1, 0.7)
+    end
+
+    -- Opening animation
+    self._container.Size = UDim2.new(0, 0, 0, 0)
+    self._window.BackgroundTransparency = 1
+    task.defer(function()
+        Util.Tween(self._container, self._animSpeed, { Size = self._windowSize }, Enum.EasingStyle.Back)
+        Util.Tween(self._window, self._animSpeed * 0.8, { BackgroundTransparency = 0 })
+    end)
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Input Handlers
+-- ══════════════════════════════════════════════════════════════
+
+function NexusUI:_SetupInputHandlers()
+    table.insert(self._connections, UserInputService.InputBegan:Connect(function(input, processed)
+        if processed then return end
+        if input.KeyCode == self._toggleKey then
+            self:Toggle()
+        end
+    end))
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Visibility
+-- ══════════════════════════════════════════════════════════════
+
+function NexusUI:Toggle()
+    self._visible = not self._visible
+    if self._visible then
+        self._screenGui.Enabled = true
+        Util.Tween(self._container, self._animSpeed, {
+            Size = self._windowSize,
+        }, Enum.EasingStyle.Back)
+        Util.Tween(self._window, self._animSpeed * 0.5, { BackgroundTransparency = 0 })
+    else
+        Util.Tween(self._container, self._animSpeed * 0.7, {
+            Size = UDim2.new(0, 0, 0, 0),
+        }, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+        task.delay(self._animSpeed * 0.7, function()
+            if not self._visible then
+                self._screenGui.Enabled = false
+            end
+        end)
+    end
+end
+
+function NexusUI:Show()
+    if not self._visible then self:Toggle() end
+end
+
+function NexusUI:Hide()
+    if self._visible then self:Toggle() end
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Theme Management
+-- ══════════════════════════════════════════════════════════════
+
+function NexusUI:SetTheme(themeName: string | {[string]: Color3})
+    if type(themeName) == "table" then
+        self._theme = Util.DeepCopy(themeName)
+    else
+        self._theme = Util.DeepCopy(Themes[themeName] or Themes.Dark)
+    end
+    -- Rebuild would be needed for full hot-reload;
+    -- For simplicity, users can re-create. Advanced: store references and update.
+end
+
+function NexusUI:GetTheme(): {[string]: Color3}
+    return self._theme
+end
+
+function NexusUI:GetFlag(flag: string): any
+    return self._flags[flag]
+end
+
+function NexusUI:SetFlag(flag: string, value: any)
+    self._flags[flag] = value
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Page / Tab System
+-- ══════════════════════════════════════════════════════════════
+
+local Page = {}
+Page.__index = Page
+
+function NexusUI:CreatePage(config: PageConfig): any
+    local theme = self._theme
+    local page = setmetatable({}, Page)
+    page._nexus  = self
+    page._name   = config.Name
+    page._icon   = config.Icon
+    page._items  = {}
+
+    -- Tab button in sidebar
+    local tabBtn = Util.Create("TextButton", {
+        Name = config.Name .. "_Tab",
+        Size = UDim2.new(1, 0, 0, 34),
+        BackgroundColor3 = theme.Accent,
+        BackgroundTransparency = 1,
+        Text = "",
+        AutoButtonColor = false,
+        BorderSizePixel = 0,
+        LayoutOrder = config.LayoutOrder or #self._pages + 1,
+        Parent = self._tabHolder,
+    })
+    Util.Corner(tabBtn, 6)
+
+    -- Active indicator bar
+    local indicator = Util.Create("Frame", {
+        Name = "Indicator",
+        Position = UDim2.new(0, 0, 0.15, 0),
+        Size = UDim2.new(0, 3, 0.7, 0),
+        BackgroundColor3 = theme.Accent,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Parent = tabBtn,
+    })
+    Util.Corner(indicator, 2)
+
+    -- Icon
+    if config.Icon then
+        Util.Create("ImageLabel", {
+            Name = "Icon",
+            AnchorPoint = Vector2.new(0, 0.5),
+            Position = UDim2.new(0, 10, 0.5, 0),
+            Size = UDim2.new(0, 16, 0, 16),
+            BackgroundTransparency = 1,
+            Image = config.Icon,
+            ImageColor3 = theme.TextDim,
+            Parent = tabBtn,
+        })
+    end
+
+    local textOffset = config.Icon and 32 or 10
+    local tabLabel = Util.Create("TextLabel", {
+        Name = "Label",
+        AnchorPoint = Vector2.new(0, 0.5),
+        Position = UDim2.new(0, textOffset, 0.5, 0),
+        Size = UDim2.new(1, -textOffset - 8, 1, 0),
+        BackgroundTransparency = 1,
+        Text = config.Name,
+        TextColor3 = theme.TextDim,
+        TextSize = 13,
+        Font = self._font,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        Parent = tabBtn,
+    })
+
+    -- Content scroll frame for this page
+    local contentFrame = Util.Create("ScrollingFrame", {
+        Name = config.Name .. "_Content",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        ScrollBarThickness = 3,
+        ScrollBarImageColor3 = theme.Accent,
+        ScrollBarImageTransparency = 0.5,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        BorderSizePixel = 0,
+        Visible = false,
+        Parent = self._contentArea,
+    })
+    Util.Padding(contentFrame, 12, 12, 14, 14)
+    Util.ListLayout(contentFrame, 8)
+
+    page._tabBtn       = tabBtn
+    page._indicator    = indicator
+    page._tabLabel     = tabLabel
+    page._contentFrame = contentFrame
+
+    -- Hover effects
+    tabBtn.MouseEnter:Connect(function()
+        if self._activePage ~= page then
+            Util.Tween(tabBtn, 0.2, { BackgroundTransparency = 0.85 })
+            Util.Tween(tabLabel, 0.2, { TextColor3 = theme.Text })
+        end
+    end)
+    tabBtn.MouseLeave:Connect(function()
+        if self._activePage ~= page then
+            Util.Tween(tabBtn, 0.2, { BackgroundTransparency = 1 })
+            Util.Tween(tabLabel, 0.2, { TextColor3 = theme.TextDim })
+        end
+    end)
+
+    -- Click to select
+    tabBtn.MouseButton1Click:Connect(function()
+        self:_SelectPage(page)
+    end)
+
+    table.insert(self._pages, page)
+
+    -- Auto-select first page
+    if #self._pages == 1 then
+        task.defer(function()
+            self:_SelectPage(page)
+        end)
+    end
+
+    return page
+end
+
+function NexusUI:_SelectPage(page)
+    local theme = self._theme
+
+    -- Deselect previous
+    if self._activePage then
+        local prev = self._activePage
+        prev._contentFrame.Visible = false
+        Util.Tween(prev._tabBtn, 0.25, { BackgroundTransparency = 1 })
+        Util.Tween(prev._tabLabel, 0.25, { TextColor3 = theme.TextDim })
+        Util.Tween(prev._indicator, 0.25, { BackgroundTransparency = 1 })
+    end
+
+    -- Select new
+    self._activePage = page
+    page._contentFrame.Visible = true
+    Util.Tween(page._tabBtn, 0.25, { BackgroundTransparency = 0.88 })
+    Util.Tween(page._tabLabel, 0.25, { TextColor3 = theme.Text })
+    Util.Tween(page._indicator, 0.25, { BackgroundTransparency = 0 })
+
+    -- Slide-in animation for content
+    for _, child in ipairs(page._contentFrame:GetChildren()) do
+        if child:IsA("GuiObject") and child.Name ~= "UIListLayout" and child.Name ~= "UIPadding" then
+            child.Position = UDim2.new(0.03, 0, child.Position.Y.Scale, child.Position.Y.Offset)
+            local originalTransp = child.BackgroundTransparency
+            child.BackgroundTransparency = math.min(originalTransp + 0.3, 1)
+            task.defer(function()
+                Util.Tween(child, 0.3, {
+                    Position = UDim2.new(0, 0, child.Position.Y.Scale, child.Position.Y.Offset),
+                    BackgroundTransparency = originalTransp,
+                })
+            end)
+        end
+    end
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Component Helpers
+-- ══════════════════════════════════════════════════════════════
+
+function Page:_CreateItemFrame(config: {Text: string?, Description: string?, LayoutOrder: number?}, height: number?): Frame
+    local theme = self._nexus._theme
+    local h = height or 38
+
+    local frame = Util.Create("Frame", {
+        Name = (config.Text or "Item") .. "_Frame",
+        Size = UDim2.new(1, 0, 0, h),
+        BackgroundColor3 = theme.SurfaceAlt,
+        BackgroundTransparency = 0.4,
+        BorderSizePixel = 0,
+        LayoutOrder = config.LayoutOrder or #self._items + 1,
+        Parent = self._contentFrame,
+    })
+    Util.Corner(frame, self._nexus._cornerR)
+    Util.Stroke(frame, theme.Border, 1, 0.75)
+    Util.Padding(frame, 0, 0, 12, 12)
+
+    -- Hover
+    frame.MouseEnter:Connect(function()
+        Util.Tween(frame, 0.2, { BackgroundTransparency = 0.2 })
+    end)
+    frame.MouseLeave:Connect(function()
+        Util.Tween(frame, 0.2, { BackgroundTransparency = 0.4 })
+    end)
+
+    -- Title label
+    if config.Text then
+        Util.Create("TextLabel", {
+            Name = "Title",
+            AnchorPoint = Vector2.new(0, 0.5),
+            Position = UDim2.new(0, 0, 0.5, config.Description and -7 or 0),
+            Size = UDim2.new(0.55, 0, 0, 16),
+            BackgroundTransparency = 1,
+            Text = config.Text,
+            TextColor3 = theme.Text,
+            TextSize = 13,
+            Font = self._nexus._font,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = frame,
+        })
+    end
+
+    -- Description sublabel
+    if config.Description then
+        Util.Create("TextLabel", {
+            Name = "Desc",
+            AnchorPoint = Vector2.new(0, 0.5),
+            Position = UDim2.new(0, 0, 0.5, 8),
+            Size = UDim2.new(0.55, 0, 0, 12),
+            BackgroundTransparency = 1,
+            Text = config.Description,
+            TextColor3 = theme.TextDim,
+            TextSize = 11,
+            Font = self._nexus._font,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            Parent = frame,
+        })
+    end
+
+    table.insert(self._items, frame)
+    return frame
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Button
+-- ══════════════════════════════════════════════════════════════
+
+function Page:CreateButton(config: ButtonConfig)
+    local theme = self._nexus._theme
+    local frame = self:_CreateItemFrame(config)
+
+    local btn = Util.Create("TextButton", {
+        Name = "Btn",
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, 0, 0.5, 0),
+        Size = UDim2.new(0, 80, 0, 26),
+        BackgroundColor3 = theme.Accent,
+        Text = "Run",
+        TextColor3 = Color3.new(1, 1, 1),
+        TextSize = 12,
+        Font = self._nexus._titleFont,
+        BorderSizePixel = 0,
+        AutoButtonColor = false,
+        Parent = frame,
+    })
+    Util.Corner(btn, 6)
+
+    btn.MouseEnter:Connect(function()
+        if not config.Disabled then
+            Util.Tween(btn, 0.2, { BackgroundColor3 = theme.AccentHover, Size = UDim2.new(0, 84, 0, 28) })
+        end
+    end)
+    btn.MouseLeave:Connect(function()
+        Util.Tween(btn, 0.2, { BackgroundColor3 = theme.Accent, Size = UDim2.new(0, 80, 0, 26) })
+    end)
+    btn.MouseButton1Click:Connect(function()
+        if config.Disabled then return end
+        -- Ripple
+        local mx = Mouse.X - btn.AbsolutePosition.X
+        local my = Mouse.Y - btn.AbsolutePosition.Y
+        Util.Ripple(btn, mx, my, Color3.new(1, 1, 1))
+        -- Flash
+        Util.Tween(btn, 0.1, { BackgroundColor3 = theme.AccentHover })
+        task.delay(0.15, function()
+            Util.Tween(btn, 0.2, { BackgroundColor3 = theme.Accent })
+        end)
+        if config.Callback then
+            task.spawn(config.Callback)
+        end
+    end)
+
+    if config.Disabled then
+        btn.BackgroundTransparency = 0.5
+        btn.TextTransparency = 0.5
+    end
+
+    return {
+        Frame = frame,
+        Button = btn,
+        SetCallback = function(_, cb) config.Callback = cb end,
+        SetDisabled = function(_, v)
+            config.Disabled = v
+            btn.BackgroundTransparency = v and 0.5 or 0
+            btn.TextTransparency = v and 0.5 or 0
+        end,
+    }
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Toggle
+-- ══════════════════════════════════════════════════════════════
+
+function Page:CreateToggle(config: ToggleConfig)
+    local theme = self._nexus._theme
+    local frame = self:_CreateItemFrame(config)
+    local toggled = config.Default or false
+
+    -- Toggle track
+    local track = Util.Create("Frame", {
+        Name = "Track",
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, 0, 0.5, 0),
+        Size = UDim2.new(0, 40, 0, 22),
+        BackgroundColor3 = toggled and theme.Accent or theme.Border,
+        BorderSizePixel = 0,
+        Parent = frame,
+    })
+    Util.Corner(track, 11)
+
+    -- Toggle knob
+    local knob = Util.Create("Frame", {
+        Name = "Knob",
+        AnchorPoint = Vector2.new(0, 0.5),
+        Position = toggled and UDim2.new(1, -19, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+        Size = UDim2.new(0, 16, 0, 16),
+        BackgroundColor3 = Color3.new(1, 1, 1),
+        BorderSizePixel = 0,
+        Parent = track,
+    })
+    Util.Corner(knob, 8)
+
+    local function update()
+        if toggled then
+            Util.Tween(track, 0.25, { BackgroundColor3 = theme.Accent })
+            Util.Tween(knob, 0.25, { Position = UDim2.new(1, -19, 0.5, 0) }, Enum.EasingStyle.Back)
+        else
+            Util.Tween(track, 0.25, { BackgroundColor3 = theme.Border })
+            Util.Tween(knob, 0.25, { Position = UDim2.new(0, 3, 0.5, 0) }, Enum.EasingStyle.Back)
+        end
+    end
+
+    -- Clickable overlay on the track
+    local clickArea = Util.Create("TextButton", {
+        Name = "ClickArea",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Text = "",
+        Parent = track,
+    })
+    clickArea.MouseButton1Click:Connect(function()
+        toggled = not toggled
+        update()
+        if config.Flag then self._nexus._flags[config.Flag] = toggled end
+        if config.Callback then task.spawn(config.Callback, toggled) end
+    end)
+
+    if config.Flag then
+        self._nexus._flags[config.Flag] = toggled
+    end
+
+    return {
+        Frame = frame,
+        GetValue = function() return toggled end,
+        SetValue = function(_, v)
+            toggled = v
+            update()
+            if config.Flag then self._nexus._flags[config.Flag] = toggled end
+        end,
+    }
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Slider
+-- ══════════════════════════════════════════════════════════════
+
+function Page:CreateSlider(config: SliderConfig)
+    local theme = self._nexus._theme
+    local frame = self:_CreateItemFrame(config, 50)
+
+    local min  = config.Min or 0
+    local max  = config.Max or 100
+    local inc  = config.Increment or 1
+    local val  = config.Default or min
+    local suffix = config.Suffix or ""
+
+    -- Value label
+    local valLabel = Util.Create("TextLabel", {
+        Name = "Value",
+        AnchorPoint = Vector2.new(1, 0),
+        Position = UDim2.new(1, 0, 0, 5),
+        Size = UDim2.new(0, 60, 0, 16),
+        BackgroundTransparency = 1,
+        Text = tostring(val) .. suffix,
+        TextColor3 = theme.Accent,
+        TextSize = 12,
+        Font = self._nexus._titleFont,
+        TextXAlignment = Enum.TextXAlignment.Right,
+        Parent = frame,
+    })
+
+    -- Slider track
+    local sliderTrack = Util.Create("Frame", {
+        Name = "SliderTrack",
+        AnchorPoint = Vector2.new(0.5, 1),
+        Position = UDim2.new(0.5, 0, 1, -8),
+        Size = UDim2.new(1, -8, 0, 6),
+        BackgroundColor3 = theme.Border,
+        BorderSizePixel = 0,
+        Parent = frame,
+    })
+    Util.Corner(sliderTrack, 3)
+
+    -- Fill
+    local fill = Util.Create("Frame", {
+        Name = "Fill",
+        Size = UDim2.new((val - min) / (max - min), 0, 1, 0),
+        BackgroundColor3 = theme.Accent,
+        BorderSizePixel = 0,
+        Parent = sliderTrack,
+    })
+    Util.Corner(fill, 3)
+
+    -- Knob
+    local sliderKnob = Util.Create("Frame", {
+        Name = "Knob",
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new((val - min) / (max - min), 0, 0.5, 0),
+        Size = UDim2.new(0, 14, 0, 14),
+        BackgroundColor3 = Color3.new(1, 1, 1),
+        BorderSizePixel = 0,
+        ZIndex = 5,
+        Parent = sliderTrack,
+    })
+    Util.Corner(sliderKnob, 7)
+    Util.Stroke(sliderKnob, theme.Accent, 2, 0)
+
+    local dragging = false
+
+    local function setVal(input)
+        local pos = math.clamp(
+            (input.Position.X - sliderTrack.AbsolutePosition.X) / sliderTrack.AbsoluteSize.X,
+            0, 1
+        )
+        local raw = min + (max - min) * pos
+        val = math.floor(raw / inc + 0.5) * inc
+        val = math.clamp(val, min, max)
+
+        local ratio = (val - min) / (max - min)
+        fill.Size = UDim2.new(ratio, 0, 1, 0)
+        sliderKnob.Position = UDim2.new(ratio, 0, 0.5, 0)
+        valLabel.Text = tostring(val) .. suffix
+
+        if config.Flag then self._nexus._flags[config.Flag] = val end
+        if config.Callback then task.spawn(config.Callback, val) end
+    end
+
+    -- Input handling
+    local inputBtn = Util.Create("TextButton", {
+        Name = "InputArea",
+        Size = UDim2.new(1, 0, 1, 10),
+        Position = UDim2.new(0, 0, 0, -5),
+        BackgroundTransparency = 1,
+        Text = "",
+        Parent = sliderTrack,
+        ZIndex = 6,
+    })
+
+    inputBtn.MouseButton1Down:Connect(function()
+        dragging = true
+    end)
+
+    table.insert(self._nexus._connections, UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            setVal(input)
+        end
+    end))
+
+    table.insert(self._nexus._connections, UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end))
+
+    inputBtn.MouseButton1Click:Connect(function()
+        -- Single click to jump
+        local input = { Position = Vector3.new(Mouse.X, Mouse.Y, 0) }
+        setVal(input)
+    end)
+
+    if config.Flag then self._nexus._flags[config.Flag] = val end
+
+    return {
+        Frame = frame,
+        GetValue = function() return val end,
+        SetValue = function(_, v)
+            val = math.clamp(v, min, max)
+            local ratio = (val - min) / (max - min)
+            fill.Size = UDim2.new(ratio, 0, 1, 0)
+            sliderKnob.Position = UDim2.new(ratio, 0, 0.5, 0)
+            valLabel.Text = tostring(val) .. suffix
+            if config.Flag then self._nexus._flags[config.Flag] = val end
+        end,
+    }
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Dropdown
+-- ══════════════════════════════════════════════════════════════
+
+function Page:CreateDropdown(config: DropdownConfig)
+    local theme = self._nexus._theme
+    local frame = self:_CreateItemFrame(config, 38)
+    local options = config.Options or {}
+    local selected = config.Default or (options[1] or "")
+    local expanded = false
+    local multi = config.Multi or false
+    local multiSelected = {}
+
+    if multi and config.Default then
+        if type(config.Default) == "table" then
+            for _, v in ipairs(config.Default) do
+                multiSelected[v] = true
+            end
+        end
+    end
+
+    -- Selected display
+    local display = Util.Create("TextButton", {
+        Name = "Display",
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, 0, 0.5, 0),
+        Size = UDim2.new(0, 140, 0, 26),
+        BackgroundColor3 = theme.Surface,
+        Text = "",
+        AutoButtonColor = false,
+        BorderSizePixel = 0,
+        Parent = frame,
+    })
+    Util.Corner(display, 6)
+    Util.Stroke(display, theme.Border, 1, 0.6)
+
+    local displayLabel = Util.Create("TextLabel", {
+        Name = "Label",
+        AnchorPoint = Vector2.new(0, 0.5),
+        Position = UDim2.new(0, 10, 0.5, 0),
+        Size = UDim2.new(1, -30, 1, 0),
+        BackgroundTransparency = 1,
+        Text = tostring(selected),
+        TextColor3 = theme.Text,
+        TextSize = 12,
+        Font = self._nexus._font,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        Parent = display,
+    })
+
+    -- Arrow indicator
+    local arrow = Util.Create("TextLabel", {
+        Name = "Arrow",
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -8, 0.5, 0),
+        Size = UDim2.new(0, 12, 0, 12),
+        BackgroundTransparency = 1,
+        Text = "▼",
+        TextColor3 = theme.TextDim,
+        TextSize = 8,
+        Font = self._nexus._font,
+        Parent = display,
+    })
+
+    -- Options container (initially hidden)
+    local optionsFrame = Util.Create("Frame", {
+        Name = "Options",
+        Position = UDim2.new(0, 0, 1, 4),
+        Size = UDim2.new(1, 0, 0, 0),
+        BackgroundColor3 = theme.Surface,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+        ZIndex = 50,
+        Parent = display,
+    })
+    Util.Corner(optionsFrame, 6)
+    Util.Stroke(optionsFrame, theme.Border, 1, 0.5)
+    Util.Padding(optionsFrame, 4, 4, 4, 4)
+
+    local optScroll = Util.Create("ScrollingFrame", {
+        Name = "Scroll",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        ScrollBarThickness = 2,
+        ScrollBarImageColor3 = theme.Accent,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        BorderSizePixel = 0,
+        ZIndex = 51,
+        Parent = optionsFrame,
+    })
+    Util.ListLayout(optScroll, 2)
+
+    local function refreshOptions()
+        for _, c in ipairs(optScroll:GetChildren()) do
+            if c:IsA("TextButton") then c:Destroy() end
+        end
+
+        for i, opt in ipairs(options) do
+            local isActive = (multi and multiSelected[opt]) or (not multi and selected == opt)
+            local optBtn = Util.Create("TextButton", {
+                Name = opt,
+                Size = UDim2.new(1, 0, 0, 26),
+                BackgroundColor3 = isActive and theme.Accent or theme.SurfaceAlt,
+                BackgroundTransparency = isActive and 0.7 or 0.5,
+                Text = opt,
+                TextColor3 = isActive and theme.Accent or theme.Text,
+                TextSize = 12,
+                Font = self._nexus._font,
+                BorderSizePixel = 0,
+                AutoButtonColor = false,
+                ZIndex = 52,
+                LayoutOrder = i,
+                Parent = optScroll,
+            })
+            Util.Corner(optBtn, 4)
+
+            optBtn.MouseEnter:Connect(function()
+                if not ((multi and multiSelected[opt]) or (not multi and selected == opt)) then
+                    Util.Tween(optBtn, 0.15, { BackgroundTransparency = 0.3 })
+                end
+            end)
+            optBtn.MouseLeave:Connect(function()
+                local act = (multi and multiSelected[opt]) or (not multi and selected == opt)
+                Util.Tween(optBtn, 0.15, { BackgroundTransparency = act and 0.7 or 0.5 })
+            end)
+
+            optBtn.MouseButton1Click:Connect(function()
+                if multi then
+                    multiSelected[opt] = not multiSelected[opt]
+                    local sel = {}
+                    for _, o in ipairs(options) do
+                        if multiSelected[o] then table.insert(sel, o) end
+                    end
+                    displayLabel.Text = #sel > 0 and table.concat(sel, ", ") or "None"
+                    refreshOptions()
+                    if config.Callback then task.spawn(config.Callback, sel) end
+                    if config.Flag then self._nexus._flags[config.Flag] = sel end
+                else
+                    selected = opt
+                    displayLabel.Text = opt
+                    refreshOptions()
+                    -- Close
+                    expanded = false
+                    Util.Tween(optionsFrame, 0.2, { Size = UDim2.new(1, 0, 0, 0) })
+                    Util.Tween(arrow, 0.2, { Rotation = 0 })
+                    Util.Tween(frame, 0.2, { Size = UDim2.new(1, 0, 0, 38) })
+                    if config.Callback then task.spawn(config.Callback, selected) end
+                    if config.Flag then self._nexus._flags[config.Flag] = selected end
+                end
+            end)
+        end
+    end
+
+    refreshOptions()
+
+    display.MouseButton1Click:Connect(function()
+        expanded = not expanded
+        if expanded then
+            local targetH = math.min(#options * 28 + 10, 150)
+            Util.Tween(optionsFrame, 0.25, { Size = UDim2.new(1, 0, 0, targetH) })
+            Util.Tween(arrow, 0.25, { Rotation = 180 })
+            Util.Tween(frame, 0.25, { Size = UDim2.new(1, 0, 0, 38 + targetH + 6) })
+        else
+            Util.Tween(optionsFrame, 0.2, { Size = UDim2.new(1, 0, 0, 0) })
+            Util.Tween(arrow, 0.2, { Rotation = 0 })
+            Util.Tween(frame, 0.2, { Size = UDim2.new(1, 0, 0, 38) })
+        end
+    end)
+
+    if config.Flag then
+        self._nexus._flags[config.Flag] = multi and {} or selected
+    end
+
+    return {
+        Frame = frame,
+        GetValue = function() return multi and multiSelected or selected end,
+        SetOptions = function(_, newOpts)
+            options = newOpts
+            refreshOptions()
+        end,
+        SetValue = function(_, v)
+            if multi then
+                multiSelected = {}
+                for _, o in ipairs(v) do multiSelected[o] = true end
+                local sel = {}
+                for _, o in ipairs(options) do
+                    if multiSelected[o] then table.insert(sel, o) end
+                end
+                displayLabel.Text = #sel > 0 and table.concat(sel, ", ") or "None"
+            else
+                selected = v
+                displayLabel.Text = v
+            end
+            refreshOptions()
+        end,
+    }
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  TextBox
+-- ══════════════════════════════════════════════════════════════
+
+function Page:CreateTextBox(config: TextBoxConfig)
+    local theme = self._nexus._theme
+    local frame = self:_CreateItemFrame(config)
+    local value = config.Default or ""
+
+    local textBox = Util.Create("TextBox", {
+        Name = "Input",
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, 0, 0.5, 0),
+        Size = UDim2.new(0, 140, 0, 26),
+        BackgroundColor3 = theme.Surface,
+        Text = value,
+        PlaceholderText = config.Placeholder or "Type here...",
+        PlaceholderColor3 = theme.TextDim,
+        TextColor3 = theme.Text,
+        TextSize = 12,
+        Font = self._nexus._font,
+        ClearTextOnFocus = config.ClearOnFocus or false,
+        BorderSizePixel = 0,
+        Parent = frame,
+    })
+    Util.Corner(textBox, 6)
+    Util.Stroke(textBox, theme.Border, 1, 0.6)
+    Util.Padding(textBox, 0, 0, 8, 8)
+
+    local stroke = textBox:FindFirstChildOfClass("UIStroke")
+
+    textBox.Focused:Connect(function()
+        if stroke then
+            Util.Tween(stroke, 0.2, { Color = theme.Accent, Transparency = 0 })
+        end
+    end)
+
+    textBox.FocusLost:Connect(function(enterPressed)
+        if stroke then
+            Util.Tween(stroke, 0.2, { Color = theme.Border, Transparency = 0.6 })
+        end
+        value = textBox.Text
+        if config.Flag then self._nexus._flags[config.Flag] = value end
+        if enterPressed and config.Callback then
+            task.spawn(config.Callback, value)
+        end
+    end)
+
+    if config.Flag then self._nexus._flags[config.Flag] = value end
+
+    return {
+        Frame = frame,
+        GetValue = function() return textBox.Text end,
+        SetValue = function(_, v)
+            textBox.Text = v
+            value = v
+            if config.Flag then self._nexus._flags[config.Flag] = v end
+        end,
+    }
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Label
+-- ══════════════════════════════════════════════════════════════
+
+function Page:CreateLabel(config: LabelConfig)
+    local theme = self._nexus._theme
+
+    local label = Util.Create("TextLabel", {
+        Name = "Label_" .. (config.Text or ""),
+        Size = UDim2.new(1, 0, 0, 24),
+        BackgroundTransparency = 1,
+        Text = config.Text or "",
+        TextColor3 = theme.TextDim,
+        TextSize = 12,
+        Font = self._nexus._font,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        LayoutOrder = config.LayoutOrder or #self._items + 1,
+        Parent = self._contentFrame,
+    })
+    Util.Padding(label, 0, 0, 4, 0)
+
+    table.insert(self._items, label)
+
+    return {
+        Frame = label,
+        SetText = function(_, text) label.Text = text end,
+    }
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Divider
+-- ══════════════════════════════════════════════════════════════
+
+function Page:CreateDivider()
+    local theme = self._nexus._theme
+
+    local divider = Util.Create("Frame", {
+        Name = "Divider",
+        Size = UDim2.new(1, 0, 0, 1),
+        BackgroundColor3 = theme.Border,
+        BackgroundTransparency = 0.5,
+        BorderSizePixel = 0,
+        LayoutOrder = #self._items + 1,
+        Parent = self._contentFrame,
+    })
+
+    table.insert(self._items, divider)
+    return { Frame = divider }
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Keybind
+-- ══════════════════════════════════════════════════════════════
+
+function Page:CreateKeybind(config: KeybindConfig)
+    local theme = self._nexus._theme
+    local frame = self:_CreateItemFrame(config)
+    local currentKey = config.Default or Enum.KeyCode.Unknown
+    local listening = false
+
+    local keyBtn = Util.Create("TextButton", {
+        Name = "KeyBtn",
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, 0, 0.5, 0),
+        Size = UDim2.new(0, 80, 0, 26),
+        BackgroundColor3 = theme.Surface,
+        Text = currentKey == Enum.KeyCode.Unknown and "None" or currentKey.Name,
+        TextColor3 = theme.Text,
+        TextSize = 12,
+        Font = self._nexus._font,
+        BorderSizePixel = 0,
+        AutoButtonColor = false,
+        Parent = frame,
+    })
+    Util.Corner(keyBtn, 6)
+    Util.Stroke(keyBtn, theme.Border, 1, 0.6)
+
+    keyBtn.MouseButton1Click:Connect(function()
+        if listening then return end
+        listening = true
+        keyBtn.Text = "..."
+        Util.Tween(keyBtn:FindFirstChildOfClass("UIStroke"), 0.2, { Color = theme.Accent, Transparency = 0 })
+
+        local conn
+        conn = UserInputService.InputBegan:Connect(function(input, processed)
+            if processed then return end
+            if input.UserInputType == Enum.UserInputType.Keyboard then
+                currentKey = input.KeyCode
+                keyBtn.Text = currentKey.Name
+                listening = false
+                Util.Tween(keyBtn:FindFirstChildOfClass("UIStroke"), 0.2, { Color = theme.Border, Transparency = 0.6 })
+                if config.Flag then self._nexus._flags[config.Flag] = currentKey end
+                if config.Callback then task.spawn(config.Callback, currentKey) end
+                conn:Disconnect()
+            end
+        end)
+    end)
+
+    if config.Flag then self._nexus._flags[config.Flag] = currentKey end
+
+    return {
+        Frame = frame,
+        GetValue = function() return currentKey end,
+        SetValue = function(_, key)
+            currentKey = key
+            keyBtn.Text = key.Name
+            if config.Flag then self._nexus._flags[config.Flag] = key end
+        end,
+    }
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Color Picker (Simplified inline HSV)
+-- ══════════════════════════════════════════════════════════════
+
+function Page:CreateColorPicker(config: ColorPickerConfig)
+    local theme = self._nexus._theme
+    local frame = self:_CreateItemFrame(config, 38)
+    local color = config.Default or Color3.new(1, 0, 0)
+    local expanded = false
+
+    -- Color preview swatch
+    local swatch = Util.Create("TextButton", {
+        Name = "Swatch",
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, 0, 0.5, 0),
+        Size = UDim2.new(0, 36, 0, 22),
+        BackgroundColor3 = color,
+        Text = "",
+        AutoButtonColor = false,
+        BorderSizePixel = 0,
+        Parent = frame,
+    })
+    Util.Corner(swatch, 6)
+    Util.Stroke(swatch, theme.Border, 1, 0.5)
+
+    -- Picker panel (hidden by default)
+    local pickerPanel = Util.Create("Frame", {
+        Name = "Picker",
+        Position = UDim2.new(0, 0, 1, 4),
+        Size = UDim2.new(1, 0, 0, 0),
+        BackgroundColor3 = theme.Surface,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+        ZIndex = 60,
+        Parent = frame,
+    })
+    Util.Corner(pickerPanel, 6)
+    Util.Stroke(pickerPanel, theme.Border, 1, 0.5)
+
+    -- Hue slider
+    local hueTrack = Util.Create("Frame", {
+        Name = "HueTrack",
+        Position = UDim2.new(0.05, 0, 0.15, 0),
+        Size = UDim2.new(0.9, 0, 0, 14),
+        BackgroundColor3 = Color3.new(1, 1, 1),
+        BorderSizePixel = 0,
+        ZIndex = 61,
+        Parent = pickerPanel,
+    })
+    Util.Corner(hueTrack, 4)
+
+    -- Create a rainbow gradient for hue
+    local hueGradient = Util.Create("UIGradient", {
+        Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromHSV(0, 1, 1)),
+            ColorSequenceKeypoint.new(0.167, Color3.fromHSV(0.167, 1, 1)),
+            ColorSequenceKeypoint.new(0.333, Color3.fromHSV(0.333, 1, 1)),
+            ColorSequenceKeypoint.new(0.5, Color3.fromHSV(0.5, 1, 1)),
+            ColorSequenceKeypoint.new(0.667, Color3.fromHSV(0.667, 1, 1)),
+            ColorSequenceKeypoint.new(0.833, Color3.fromHSV(0.833, 1, 1)),
+            ColorSequenceKeypoint.new(1, Color3.fromHSV(1, 1, 1)),
+        }),
+        Parent = hueTrack,
+    })
+
+    -- Sat/Val area
+    local svArea = Util.Create("Frame", {
+        Name = "SVArea",
+        Position = UDim2.new(0.05, 0, 0.45, 0),
+        Size = UDim2.new(0.9, 0, 0, 60),
+        BackgroundColor3 = Color3.fromHSV(0, 1, 1),
+        BorderSizePixel = 0,
+        ZIndex = 61,
+        Parent = pickerPanel,
+    })
+    Util.Corner(svArea, 4)
+
+    -- White→Transparent gradient (saturation)
+    Util.Create("UIGradient", {
+        Color = ColorSequence.new(Color3.new(1,1,1), Color3.new(1,1,1)),
+        Transparency = NumberSequence.new(0, 1),
+        Parent = svArea,
+    })
+
+    -- Black overlay (value)
+    local blackOverlay = Util.Create("Frame", {
+        Name = "BlackOverlay",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundColor3 = Color3.new(0, 0, 0),
+        BackgroundTransparency = 0,
+        BorderSizePixel = 0,
+        ZIndex = 62,
+        Parent = svArea,
+    })
+    Util.Corner(blackOverlay, 4)
+    Util.Create("UIGradient", {
+        Color = ColorSequence.new(Color3.new(0,0,0), Color3.new(0,0,0)),
+        Transparency = NumberSequence.new(1, 0),
+        Rotation = 90,
+        Parent = blackOverlay,
+    })
+
+    local h, s, v = Color3.toHSV(color)
+
+    -- Interaction
+    local hueDragging = false
+    local svDragging = false
+
+    local function updateColor()
+        color = Color3.fromHSV(h, s, v)
+        swatch.BackgroundColor3 = color
+        svArea.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
+        if config.Flag then self._nexus._flags[config.Flag] = color end
+        if config.Callback then task.spawn(config.Callback, color) end
+    end
+
+    local hueInput = Util.Create("TextButton", {
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Text = "",
+        ZIndex = 63,
+        Parent = hueTrack,
+    })
+    hueInput.MouseButton1Down:Connect(function() hueDragging = true end)
+
+    local svInput = Util.Create("TextButton", {
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Text = "",
+        ZIndex = 63,
+        Parent = svArea,
+    })
+    svInput.MouseButton1Down:Connect(function() svDragging = true end)
+
+    table.insert(self._nexus._connections, UserInputService.InputChanged:Connect(function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
+        if hueDragging then
+            h = math.clamp((input.Position.X - hueTrack.AbsolutePosition.X) / hueTrack.AbsoluteSize.X, 0, 1)
+            updateColor()
+        elseif svDragging then
+            s = math.clamp((input.Position.X - svArea.AbsolutePosition.X) / svArea.AbsoluteSize.X, 0, 1)
+            v = 1 - math.clamp((input.Position.Y - svArea.AbsolutePosition.Y) / svArea.AbsoluteSize.Y, 0, 1)
+            updateColor()
+        end
+    end))
+
+    table.insert(self._nexus._connections, UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            hueDragging = false
+            svDragging = false
+        end
+    end))
+
+    swatch.MouseButton1Click:Connect(function()
+        expanded = not expanded
+        if expanded then
+            Util.Tween(pickerPanel, 0.25, { Size = UDim2.new(1, 0, 0, 100) })
+            Util.Tween(frame, 0.25, { Size = UDim2.new(1, 0, 0, 38 + 106) })
+        else
+            Util.Tween(pickerPanel, 0.2, { Size = UDim2.new(1, 0, 0, 0) })
+            Util.Tween(frame, 0.2, { Size = UDim2.new(1, 0, 0, 38) })
+        end
+    end)
+
+    if config.Flag then self._nexus._flags[config.Flag] = color end
+
+    return {
+        Frame = frame,
+        GetValue = function() return color end,
+        SetValue = function(_, c)
+            color = c
+            h, s, v = Color3.toHSV(c)
+            updateColor()
+        end,
+    }
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Progress Bar
+-- ══════════════════════════════════════════════════════════════
+
+function Page:CreateProgressBar(config: ProgressBarConfig)
+    local theme = self._nexus._theme
+    local frame = self:_CreateItemFrame(config, 42)
+    local value = config.Default or 0
+
+    -- Value label
+    local pctLabel = Util.Create("TextLabel", {
+        Name = "Pct",
+        AnchorPoint = Vector2.new(1, 0),
+        Position = UDim2.new(1, 0, 0, 5),
+        Size = UDim2.new(0, 40, 0, 14),
+        BackgroundTransparency = 1,
+        Text = math.floor(value * 100) .. "%",
+        TextColor3 = theme.Accent,
+        TextSize = 11,
+        Font = self._nexus._titleFont,
+        TextXAlignment = Enum.TextXAlignment.Right,
+        Parent = frame,
+    })
+
+    -- Track
+    local track = Util.Create("Frame", {
+        Name = "Track",
+        AnchorPoint = Vector2.new(0.5, 1),
+        Position = UDim2.new(0.5, 0, 1, -8),
+        Size = UDim2.new(1, -8, 0, 6),
+        BackgroundColor3 = theme.Border,
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Parent = frame,
+    })
+    Util.Corner(track, 3)
+
+    local fill = Util.Create("Frame", {
+        Name = "Fill",
+        Size = UDim2.new(math.clamp(value, 0, 1), 0, 1, 0),
+        BackgroundColor3 = theme.Accent,
+        BorderSizePixel = 0,
+        Parent = track,
+    })
+    Util.Corner(fill, 3)
+
+    -- Animated shimmer on the fill
+    local shimmer = Util.Create("Frame", {
+        Name = "Shimmer",
+        Size = UDim2.new(0.3, 0, 1, 0),
+        BackgroundColor3 = Color3.new(1, 1, 1),
+        BackgroundTransparency = 0.85,
+        BorderSizePixel = 0,
+        Parent = fill,
+    })
+    Util.Corner(shimmer, 3)
+
+    table.insert(self._items, frame)
+
+    return {
+        Frame = frame,
+        GetValue = function() return value end,
+        SetValue = function(_, v)
+            value = math.clamp(v, 0, 1)
+            Util.Tween(fill, 0.3, { Size = UDim2.new(value, 0, 1, 0) })
+            pctLabel.Text = math.floor(value * 100) .. "%"
+        end,
+    }
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Section Header
+-- ══════════════════════════════════════════════════════════════
+
+function Page:CreateSection(text: string)
+    local theme = self._nexus._theme
+
+    local section = Util.Create("Frame", {
+        Name = "Section_" .. text,
+        Size = UDim2.new(1, 0, 0, 28),
+        BackgroundTransparency = 1,
+        LayoutOrder = #self._items + 1,
+        Parent = self._contentFrame,
+    })
+
+    Util.Create("TextLabel", {
+        Name = "Text",
+        AnchorPoint = Vector2.new(0, 0.5),
+        Position = UDim2.new(0, 4, 0.5, 0),
+        Size = UDim2.new(0, 0, 0, 14),
+        AutomaticSize = Enum.AutomaticSize.X,
+        BackgroundTransparency = 1,
+        Text = string.upper(text),
+        TextColor3 = theme.Accent,
+        TextSize = 10,
+        Font = self._nexus._titleFont,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = section,
+    })
+
+    -- Decorative line
+    Util.Create("Frame", {
+        Name = "Line",
+        AnchorPoint = Vector2.new(0, 0.5),
+        Position = UDim2.new(0, #text * 7 + 16, 0.5, 0),
+        Size = UDim2.new(1, -(#text * 7 + 20), 0, 1),
+        BackgroundColor3 = theme.Border,
+        BackgroundTransparency = 0.5,
+        BorderSizePixel = 0,
+        Parent = section,
+    })
+
+    table.insert(self._items, section)
+    return { Frame = section }
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Notification System
+-- ══════════════════════════════════════════════════════════════
+
+function NexusUI:Notify(config: {Title: string?, Message: string?, Duration: number?, Type: string?})
+    local theme = self._theme
+    local duration = config.Duration or self._notifDur
+    local notifType = config.Type or "Info"
+
+    local accentColor = theme.Accent
+    if notifType == "Success" then accentColor = theme.Success
+    elseif notifType == "Warning" then accentColor = theme.Warning
+    elseif notifType == "Error" then accentColor = theme.Error end
+
+    local notif = Util.Create("Frame", {
+        Name = "Notif",
+        Size = UDim2.new(1, 0, 0, 0),
+        BackgroundColor3 = theme.Surface,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+        Parent = self._notifContainer,
+    })
+    Util.Corner(notif, 8)
+    Util.Stroke(notif, theme.Border, 1, 0.5)
+    Util.Shadow(notif, theme.Shadow, 20)
+
+    -- Accent bar on left
+    Util.Create("Frame", {
+        Name = "AccentBar",
+        Size = UDim2.new(0, 3, 1, 0),
+        BackgroundColor3 = accentColor,
+        BorderSizePixel = 0,
+        Parent = notif,
+    })
+
+    if config.Title then
+        Util.Create("TextLabel", {
+            Name = "Title",
+            Position = UDim2.new(0, 14, 0, 10),
+            Size = UDim2.new(1, -20, 0, 16),
+            BackgroundTransparency = 1,
+            Text = config.Title,
+            TextColor3 = theme.Text,
+            TextSize = 13,
+            Font = self._titleFont,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = notif,
+        })
+    end
+
+    if config.Message then
+        Util.Create("TextLabel", {
+            Name = "Message",
+            Position = UDim2.new(0, 14, 0, config.Title and 28 or 10),
+            Size = UDim2.new(1, -20, 0, 30),
+            BackgroundTransparency = 1,
+            Text = config.Message,
+            TextColor3 = theme.TextDim,
+            TextSize = 12,
+            Font = self._font,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextWrapped = true,
+            Parent = notif,
+        })
+    end
+
+    -- Animate in
+    local targetH = (config.Title and config.Message) and 65 or 40
+    Util.Tween(notif, 0.3, { Size = UDim2.new(1, 0, 0, targetH) }, Enum.EasingStyle.Back)
+
+    -- Auto dismiss
+    task.delay(duration, function()
+        Util.Tween(notif, 0.25, { Size = UDim2.new(1, 0, 0, 0) })
+        task.delay(0.3, function()
+            if notif then notif:Destroy() end
+        end)
+    end)
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Modal / Dialog
+-- ══════════════════════════════════════════════════════════════
+
+function NexusUI:CreateModal(config: {Title: string?, Message: string?, Buttons: {{Text: string, Callback: (() -> ())?}}?})
+    local theme = self._theme
+
+    -- Overlay
+    local overlay = Util.Create("Frame", {
+        Name = "ModalOverlay",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundColor3 = Color3.new(0, 0, 0),
+        BackgroundTransparency = 0.5,
+        BorderSizePixel = 0,
+        ZIndex = 100,
+        Parent = self._screenGui,
+    })
+
+    local modal = Util.Create("Frame", {
+        Name = "Modal",
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+        Size = UDim2.new(0, 320, 0, 0),
+        BackgroundColor3 = theme.Surface,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+        ZIndex = 101,
+        Parent = overlay,
+    })
+    Util.Corner(modal, 12)
+    Util.Shadow(modal, theme.Shadow, 40)
+
+    -- Title
+    if config.Title then
+        Util.Create("TextLabel", {
+            Name = "Title",
+            Position = UDim2.new(0, 24, 0, 20),
+            Size = UDim2.new(1, -48, 0, 22),
+            BackgroundTransparency = 1,
+            Text = config.Title,
+            TextColor3 = theme.Text,
+            TextSize = 16,
+            Font = self._titleFont,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 102,
+            Parent = modal,
+        })
+    end
+
+    -- Message
+    if config.Message then
+        Util.Create("TextLabel", {
+            Name = "Message",
+            Position = UDim2.new(0, 24, 0, 50),
+            Size = UDim2.new(1, -48, 0, 50),
+            BackgroundTransparency = 1,
+            Text = config.Message,
+            TextColor3 = theme.TextDim,
+            TextSize = 13,
+            Font = self._font,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextWrapped = true,
+            TextYAlignment = Enum.TextYAlignment.Top,
+            ZIndex = 102,
+            Parent = modal,
+        })
+    end
+
+    -- Buttons
+    local buttons = config.Buttons or {{ Text = "OK" }}
+    local btnContainer = Util.Create("Frame", {
+        Name = "Buttons",
+        AnchorPoint = Vector2.new(1, 1),
+        Position = UDim2.new(1, -20, 1, -16),
+        Size = UDim2.new(1, -40, 0, 32),
+        BackgroundTransparency = 1,
+        ZIndex = 102,
+        Parent = modal,
+    })
+    Util.ListLayout(btnContainer, 8, Enum.FillDirection.Horizontal, Enum.HorizontalAlignment.Right, Enum.VerticalAlignment.Center)
+
+    for i, btnConfig in ipairs(buttons) do
+        local isPrimary = (i == #buttons)
+        local btn = Util.Create("TextButton", {
+            Name = btnConfig.Text,
+            Size = UDim2.new(0, 80, 0, 30),
+            BackgroundColor3 = isPrimary and theme.Accent or theme.SurfaceAlt,
+            Text = btnConfig.Text,
+            TextColor3 = isPrimary and Color3.new(1,1,1) or theme.Text,
+            TextSize = 12,
+            Font = self._titleFont,
+            BorderSizePixel = 0,
+            AutoButtonColor = false,
+            ZIndex = 103,
+            LayoutOrder = i,
+            Parent = btnContainer,
+        })
+        Util.Corner(btn, 6)
+
+        btn.MouseEnter:Connect(function()
+            Util.Tween(btn, 0.15, {
+                BackgroundColor3 = isPrimary and theme.AccentHover or theme.Border
+            })
+        end)
+        btn.MouseLeave:Connect(function()
+            Util.Tween(btn, 0.15, {
+                BackgroundColor3 = isPrimary and theme.Accent or theme.SurfaceAlt
+            })
+        end)
+
+        btn.MouseButton1Click:Connect(function()
+            -- Close modal
+            Util.Tween(modal, 0.2, { Size = UDim2.new(0, 320, 0, 0) })
+            Util.Tween(overlay, 0.2, { BackgroundTransparency = 1 })
+            task.delay(0.25, function()
+                overlay:Destroy()
+            end)
+            if btnConfig.Callback then
+                task.spawn(btnConfig.Callback)
+            end
+        end)
+    end
+
+    -- Animate in
+    overlay.BackgroundTransparency = 1
+    Util.Tween(overlay, 0.25, { BackgroundTransparency = 0.5 })
+    Util.Tween(modal, 0.3, { Size = UDim2.new(0, 320, 0, 160) }, Enum.EasingStyle.Back)
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Cleanup
+-- ══════════════════════════════════════════════════════════════
+
+function NexusUI:Destroy()
+    -- Animate out
+    Util.Tween(self._container, self._animSpeed * 0.6, {
+        Size = UDim2.new(0, 0, 0, 0),
+    }, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+
+    task.delay(self._animSpeed * 0.7, function()
+        -- Disconnect all events
+        for _, conn in ipairs(self._connections) do
+            if conn and conn.Connected then
+                conn:Disconnect()
+            end
+        end
+        self._connections = {}
+
+        -- Remove GUI
+        if self._screenGui then
+            self._screenGui:Destroy()
+        end
+    end)
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  Expose Themes & Utilities
+-- ══════════════════════════════════════════════════════════════
+
+NexusUI.Themes = Themes
+NexusUI.Util   = Util
+
+return NexusUI
