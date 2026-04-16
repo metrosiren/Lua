@@ -1,0 +1,107 @@
+local function getServices()
+	return {
+		workspace = game:GetService("Workspace"),
+		replicatedstorage = game:GetService("ReplicatedStorage"),
+		replicatedfirst = game:GetService("ReplicatedFirst"),
+		serverscriptservice = game:GetService("ServerScriptService"),
+		serverstorage = game:GetService("ServerStorage"),
+		starterplayer = game:GetService("StarterPlayer"),
+		startergui = game:GetService("StarterGui"),
+		starterpack = game:GetService("StarterPack"),
+		coregui = game:GetService("CoreGui")
+	}
+end
+
+local function escape(s)
+	return s:gsub("\\", "\\\\"):gsub("\"", "\\\""):gsub("\n", "\\n"):gsub("\r", "\\r"):gsub("\t", "\\t")
+end
+
+local function valueToString(v)
+	if typeof(v) == "string" then
+		return "\"" .. escape(v) .. "\""
+	elseif typeof(v) == "number" or typeof(v) == "boolean" then
+		return tostring(v)
+	elseif typeof(v) == "Vector3" then
+		return "Vector3.new(" .. v.X .. "," .. v.Y .. "," .. v.Z .. ")"
+	elseif typeof(v) == "Vector2" then
+		return "Vector2.new(" .. v.X .. "," .. v.Y .. ")"
+	elseif typeof(v) == "Color3" then
+		return "Color3.fromRGB(" .. math.floor(v.R*255) .. "," .. math.floor(v.G*255) .. "," .. math.floor(v.B*255) .. ")"
+	elseif typeof(v) == "CFrame" then
+		local p, r = v.Position, v.Rotation
+		return "CFrame.new(" .. p.X .. "," .. p.Y .. "," .. p.Z .. "," .. r:GetComponents() .. ")"
+	elseif typeof(v) == "UDim2" then
+		return "UDim2.new(" .. v.X.Scale .. "," .. v.X.Offset .. "," .. v.Y.Scale .. "," .. v.Y.Offset .. ")"
+	elseif typeof(v) == "BrickColor" then
+		return "BrickColor.new(\"" .. v.Name .. "\")"
+	elseif typeof(v) == "EnumItem" then
+		return "Enum." .. tostring(v.EnumType) .. "." .. v.Name
+	elseif typeof(v) == "Instance" then
+		return "nil -- reference to " .. v:GetFullName()
+	else
+		return tostring(v)
+	end
+end
+
+local function getProperties(inst)
+	local props = {}
+	local success, desc = pcall(function() return inst:GetProperties() end)
+	if not success then return {} end
+	for _, prop in ipairs(desc) do
+		if not prop or prop == "Parent" or prop == "Archivable" then continue end
+		local ok, val = pcall(function() return inst[prop] end)
+		if ok then
+			table.insert(props, {prop, val})
+		end
+	end
+	return props
+end
+
+local function dumpInstance(inst, indent)
+	local out = indent .. "local " .. inst.Name:gsub("[^%w_]", "_") .. " = Instance.new(\"" .. inst.ClassName .. "\")\n"
+	
+	local props = getProperties(inst)
+	for _, p in ipairs(props) do
+		local name, val = p[1], p[2]
+		out = out .. indent .. inst.Name:gsub("[^%w_]", "_") .. "." .. name .. " = " .. valueToString(val) .. "\n"
+	end
+	
+	for attrName, attrVal in pairs(inst:GetAttributes()) do
+		out = out .. indent .. inst.Name:gsub("[^%w_]", "_") .. ":SetAttribute(\"" .. escape(attrName) .. "\", " .. valueToString(attrVal) .. ")\n"
+	end
+	
+	for _, child in ipairs(inst:GetChildren()) do
+		out = out .. dumpInstance(child, indent .. "\t")
+		out = out .. indent .. inst.Name:gsub("[^%w_]", "_") .. ":AddChild(" .. child.Name:gsub("[^%w_]", "_") .. ")\n"
+	end
+	
+	if inst:IsA("LuaSourceContainer") and inst.Source and #inst.Source > 0 then
+		out = out .. indent .. "-- Script Source for " .. inst.Name .. ":\n"
+		out = out .. indent .. "--[[ " .. escape(inst.Source) .. " ]]\n"
+	end
+	
+	return out
+end
+
+local function dumpGame()
+	local services = getServices()
+	local full = "-- Roblox Game Dump - All Instances in proper services\n\n"
+	
+	for name, svc in pairs(services) do
+		full = full .. "-- " .. name:upper() .. "\n"
+		full = full .. "local " .. name .. " = game:GetService(\"" .. svc.ClassName .. "\")\n"
+		for _, child in ipairs(svc:GetChildren()) do
+			full = full .. dumpInstance(child, "")
+		end
+		full = full .. "\n"
+	end
+	
+	full = full .. "-- End of dump\n"
+	
+	-- Save to file (executor dependent, common in Synapse/Xeno etc.)
+	writefile("game_dump_" .. os.date("%Y%m%d_%H%M%S") .. ".luau", full)
+	print("Game dump saved to game_dump_" .. os.date("%Y%m%d_%H%M%S") .. ".luau")
+	return full
+end
+
+dumpGame()
