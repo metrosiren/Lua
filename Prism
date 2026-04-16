@@ -1,1 +1,676 @@
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local CoreGui = (gethui and gethui()) or game:GetService("CoreGui")
 
+local Theme = {
+    Background = Color3.fromRGB(20, 20, 20),
+    Element = Color3.fromRGB(30, 30, 30),
+    Outline = Color3.fromRGB(45, 45, 45),
+    SliderFill = Color3.fromRGB(130, 90, 255),
+    SliderOutline = Color3.fromRGB(180, 140, 255),
+    Accent = Color3.fromRGB(220, 220, 220),
+    AccentText = Color3.fromRGB(20, 20, 20),
+    Text = Color3.fromRGB(240, 240, 240),
+    SubText = Color3.fromRGB(150, 150, 150),
+    Font = Enum.Font.GothamMedium,
+    CornerRadius = UDim.new(0, 8)
+}
+
+local Library = {}
+local function Create(className, props)
+    local inst = Instance.new(className)
+    for k, v in pairs(props or {}) do inst[k] = v end
+    return inst
+end
+
+function Library:CreateWindow(title, keyToUse, authTime, autoConfig)
+    for _, gui in ipairs(CoreGui:GetChildren()) do
+        if gui.Name == "SimpleUI" or gui.Name == "SimpleUI_Notifs" then
+            gui:Destroy()
+        end
+    end
+
+    local Window = {CurrentTab = nil, Flags = {}, Elements = {}}
+    local ScreenGui = Create("ScreenGui", {Parent = CoreGui, Name = "SimpleUI"})
+
+    Window.AutoConfig = autoConfig or false
+    Window.ConfigName = tostring(game.PlaceId) .. "_" .. tostring(title):gsub("[^%w]", "")
+
+    local saveTick = 0
+    function Window:_queueSave()
+        if not Window.AutoConfig then return end
+        local st = os.clock()
+        saveTick = st
+        task.delay(0.5, function()
+            if saveTick == st then Window:SaveConfig(Window.ConfigName, true) end
+        end)
+    end
+
+    function Window:SaveConfig(name, silent)
+        if writefile then
+            pcall(function()
+                writefile(name .. ".json", HttpService:JSONEncode(Window.Flags))
+            end)
+            if not silent then Window:Notify("Config", "Saved config: " .. name, 3) end
+        end
+    end
+
+    function Window:LoadConfig(name, silent)
+        if isfile and isfile(name .. ".json") then
+            local success, data = pcall(function()
+                return HttpService:JSONDecode(readfile(name .. ".json"))
+            end)
+            if success and type(data) == "table" then
+                for key, val in pairs(data) do
+                    if Window.Elements[key] then Window.Elements[key](val) end
+                end
+                if not silent then Window:Notify("Config", "Loaded config: " .. name, 3) end
+            end
+        end
+    end
+    
+    if Window.AutoConfig then
+        task.spawn(function()
+            task.wait(1)
+            Window:LoadConfig(Window.ConfigName, true)
+        end)
+    end
+    
+    local Main = Create("Frame", {
+        Parent = ScreenGui, Size = UDim2.new(0, 500, 0, 450),
+        Position = UDim2.new(0.5, -250, 0.5, -225), BackgroundColor3 = Theme.Background,
+        Active = true, ClipsDescendants = true
+    })
+    Create("UICorner", {Parent = Main, CornerRadius = UDim.new(0, 10)})
+    Create("UIStroke", {Parent = Main, Color = Theme.Outline, Thickness = 1})
+
+    -- Custom Dragging
+    local dragging, dragInput, dragStart, startPos
+    Main.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = Main.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    Main.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement then dragInput = input end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+
+    -- Header
+    Create("TextLabel", {
+        Parent = Main, Size = UDim2.new(1, -100, 0, 40), Position = UDim2.new(0, 20, 0, 5),
+        BackgroundTransparency = 1, Text = title, TextColor3 = Theme.Text, 
+        Font = Enum.Font.GothamBold, TextSize = 18, TextXAlignment = Enum.TextXAlignment.Left
+    })
+
+    -- Window Controls
+    local CloseBtn = Create("TextButton", {
+        Parent = Main, Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -35, 0, 15),
+        BackgroundTransparency = 1, Text = "X", TextColor3 = Theme.SubText, Font = Theme.Font, TextSize = 14
+    })
+    CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
+
+    local MinBtn = Create("TextButton", {
+        Parent = Main, Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -65, 0, 15),
+        BackgroundTransparency = 1, Text = "−", TextColor3 = Theme.SubText, Font = Theme.Font, TextSize = 18
+    })
+    local minimized = false
+    
+    -- Tab Container
+    local TabContainer = Create("Frame", {
+        Parent = Main, Size = UDim2.new(1, -40, 0, 35), Position = UDim2.new(0, 20, 0, 45),
+        BackgroundTransparency = 1
+    })
+    local TabHighlight = Create("Frame", {
+        Parent = TabContainer, BackgroundColor3 = Theme.Accent,
+        Size = UDim2.new(0, 0, 1, 0), Position = UDim2.new(0, 0, 0, 0)
+    })
+    Create("UICorner", {Parent = TabHighlight, CornerRadius = UDim.new(0, 20)})
+
+    local TabItemsFrame = Create("Frame", {
+        Parent = TabContainer, Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1
+    })
+    local TabList = Create("UIListLayout", {Parent = TabItemsFrame, FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 10)})
+
+    -- Page Container
+    local PageContainer = Create("Frame", {
+        Parent = Main, Size = UDim2.new(1, -40, 1, -100), Position = UDim2.new(0, 20, 0, 90),
+        BackgroundTransparency = 1
+    })
+
+    -- Notification System
+    local NotifGui = Create("ScreenGui", {Parent = CoreGui, Name = "SimpleUI_Notifs"})
+    local NotifList = {}
+    
+    function Window:Notify(title, text, duration)
+        duration = duration or 3
+        local Notif = Create("Frame", {
+            Parent = NotifGui, Size = UDim2.new(0, 250, 0, 70), Position = UDim2.new(1, 20, 1, -80), BackgroundColor3 = Theme.Background
+        })
+        Create("UICorner", {Parent = Notif, CornerRadius = Theme.CornerRadius})
+        Create("UIStroke", {Parent = Notif, Color = Theme.Outline, Thickness = 1})
+        
+        Create("TextLabel", {
+            Parent = Notif, Size = UDim2.new(1, -20, 0, 25), Position = UDim2.new(0, 10, 0, 5), BackgroundTransparency = 1,
+            Text = title, TextColor3 = Theme.Text, Font = Enum.Font.GothamBold, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left
+        })
+        Create("TextLabel", {
+            Parent = Notif, Size = UDim2.new(1, -20, 0, 30), Position = UDim2.new(0, 10, 0, 30), BackgroundTransparency = 1,
+            Text = text, TextColor3 = Theme.SubText, Font = Theme.Font, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+            TextWrapped = true
+        })
+        
+        table.insert(NotifList, 1, Notif)
+        
+        local function updateNotifs()
+            for i, n in ipairs(NotifList) do
+                if i > 3 then
+                    if n.Name ~= "Del" then
+                        n.Name = "Del"
+                        local tw = TweenService:Create(n, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Position = UDim2.new(1, 20, 1, n.Position.Y.Offset)})
+                        tw:Play()
+                        tw.Completed:Connect(function() n:Destroy() end)
+                    end
+                else
+                    TweenService:Create(n, TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                        Position = UDim2.new(1, -270, 1, -10 - (i * 80))
+                    }):Play()
+                end
+            end
+            
+            -- Remove any stragglers marked for deletion from logic array immediately
+            for i = #NotifList, 4, -1 do table.remove(NotifList, i) end
+        end
+        
+        updateNotifs()
+        
+        task.delay(duration, function()
+            if Notif.Name ~= "Del" then
+                Notif.Name = "Del"
+                local idx = table.find(NotifList, Notif)
+                if idx then table.remove(NotifList, idx) end
+                local tw = TweenService:Create(Notif, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Position = UDim2.new(1, 20, 1, Notif.Position.Y.Offset)})
+                tw:Play()
+                tw.Completed:Connect(function() Notif:Destroy() end)
+                updateNotifs()
+            end
+        end)
+    end
+
+    -- Key System Logic
+    local authName = "UIAuth_" .. tostring(title):gsub("[^%w]", "") .. ".txt"
+    local hasAuth = false
+    if isfile and isfile(authName) then
+        pcall(function()
+            local saved = readfile(authName)
+            local savedKey, savedElapsed = saved:match("^(.*)|(%d+)$")
+            if not savedKey then savedKey = saved end
+            
+            local keyValid = false
+            if type(keyToUse) == "table" then
+                for _, k in ipairs(keyToUse) do if k == savedKey then keyValid = true break end end
+            elseif savedKey == keyToUse then keyValid = true end
+            
+            if keyValid then
+                if authTime and savedElapsed then
+                    if (os.time() - tonumber(savedElapsed)) <= authTime then
+                        hasAuth = true
+                    end
+                elseif not authTime then
+                    hasAuth = true
+                end
+            end
+        end)
+    end
+    
+    local isKeySystem = (keyToUse ~= nil and keyToUse ~= "" and not hasAuth)
+    
+    if isKeySystem then
+        TabContainer.Visible = false
+        PageContainer.Visible = false
+        
+        local KeyContainer = Create("Frame", {
+            Parent = Main, Size = UDim2.new(1, 0, 1, -40), Position = UDim2.new(0, 0, 0, 40), BackgroundTransparency = 1
+        })
+        
+        Create("TextLabel", {
+            Parent = KeyContainer, Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 0, 0.5, -65),
+            BackgroundTransparency = 1, Text = "Please input the authentication key.", TextColor3 = Theme.SubText, 
+            Font = Theme.Font, TextSize = 14
+        })
+        
+        local KeyInputFrame = Create("Frame", {
+            Parent = KeyContainer, Size = UDim2.new(0, 300, 0, 40), Position = UDim2.new(0.5, -150, 0.5, -25),
+            BackgroundColor3 = Theme.Element
+        })
+        Create("UICorner", {Parent = KeyInputFrame, CornerRadius = UDim.new(1, 0)})
+        Create("UIStroke", {Parent = KeyInputFrame, Color = Theme.Outline, Thickness = 1})
+        
+        local KeyBox = Create("TextBox", {
+            Parent = KeyInputFrame, Size = UDim2.new(1, -30, 1, 0), Position = UDim2.new(0, 15, 0, 0),
+            BackgroundTransparency = 1, Text = "", PlaceholderText = "Enter Script Key...", TextColor3 = Theme.Text, 
+            Font = Theme.Font, TextSize = 14, ClearTextOnFocus = false, TextXAlignment = Enum.TextXAlignment.Left
+        })
+        
+        local AuthBtn = Create("TextButton", {
+            Parent = KeyContainer, Size = UDim2.new(0, 200, 0, 40), Position = UDim2.new(0.5, -100, 0.5, 25),
+            BackgroundColor3 = Theme.SliderFill, Text = "Authenticate", TextColor3 = Theme.Text,
+            Font = Enum.Font.GothamBold, TextSize = 14, AutoButtonColor = false
+        })
+        Create("UICorner", {Parent = AuthBtn, CornerRadius = UDim.new(1, 0)})
+        
+        AuthBtn.MouseEnter:Connect(function() TweenService:Create(AuthBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(150, 110, 255)}):Play() end)
+        AuthBtn.MouseLeave:Connect(function() TweenService:Create(AuthBtn, TweenInfo.new(0.15), {BackgroundColor3 = Theme.SliderFill}):Play() end)
+        
+        AuthBtn.MouseButton1Click:Connect(function()
+            local input = KeyBox.Text
+            local valid = false
+            if type(keyToUse) == "table" then
+                for _, k in ipairs(keyToUse) do if k == input then valid = true break end end
+            elseif input == keyToUse then
+                valid = true
+            end
+            
+            if valid then
+                if writefile then pcall(function() writefile(authName, input .. "|" .. tostring(os.time())) end) end
+                Window:Notify("Success", "Authenticated successfully!", 3)
+                TweenService:Create(KeyContainer, TweenInfo.new(0.4, Enum.EasingStyle.Quint, Enum.EasingDirection.In), {Position = UDim2.new(0, -500, 0, 40)}):Play()
+                task.wait(0.4)
+                KeyContainer:Destroy()
+                
+                TabContainer.Position = UDim2.new(0, 500, 0, 45)
+                PageContainer.Position = UDim2.new(0, 500, 0, 90)
+                TabContainer.Visible = true
+                PageContainer.Visible = true
+                TweenService:Create(TabContainer, TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {Position = UDim2.new(0, 20, 0, 45)}):Play()
+                TweenService:Create(PageContainer, TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {Position = UDim2.new(0, 20, 0, 90)}):Play()
+            else
+                Window:Notify("Error", "Invalid key provided.", 3)
+                local jiggle = TweenService:Create(KeyInputFrame, TweenInfo.new(0.05, Enum.EasingStyle.Sine), {Position = UDim2.new(0.5, -160, 0.5, -25)})
+                jiggle:Play()
+                jiggle.Completed:Connect(function()
+                    local jiggle2 = TweenService:Create(KeyInputFrame, TweenInfo.new(0.1, Enum.EasingStyle.Sine), {Position = UDim2.new(0.5, -140, 0.5, -25)})
+                    jiggle2:Play()
+                    jiggle2.Completed:Connect(function()
+                        TweenService:Create(KeyInputFrame, TweenInfo.new(0.05, Enum.EasingStyle.Sine), {Position = UDim2.new(0.5, -150, 0.5, -25)}):Play()
+                    end)
+                end)
+            end
+        end)
+    end
+
+    MinBtn.MouseButton1Click:Connect(function()
+        minimized = not minimized
+        if minimized then
+            TabContainer.Visible = false
+            PageContainer.Visible = false
+        end
+        local minTween = TweenService:Create(Main, TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+            Size = minimized and UDim2.new(0, 500, 0, 50) or UDim2.new(0, 500, 0, 450)
+        })
+        minTween:Play()
+        minTween.Completed:Connect(function()
+            if not minimized then
+                TabContainer.Visible = true
+                PageContainer.Visible = true
+            end
+        end)
+    end)
+
+    function Window:CreateTab(name)
+        local Tab = {}
+        local Page = Create("ScrollingFrame", {
+            Parent = PageContainer, Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
+            Visible = false, ScrollBarThickness = 0, AutomaticCanvasSize = Enum.AutomaticSize.Y
+        })
+        Create("UIListLayout", {Parent = Page, SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 5)})
+        Create("UIPadding", {Parent = Page, PaddingLeft = UDim.new(0, 2), PaddingRight = UDim.new(0, 2), PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 2)})
+
+        local TabBtn = Create("TextButton", {
+            Parent = TabItemsFrame, Size = UDim2.new(0, 100, 1, 0), BackgroundTransparency = 1,
+            Text = name, TextColor3 = Theme.SubText, Font = Theme.Font, TextSize = 13, AutoButtonColor = false
+        })
+
+        -- Auto-size tab button
+        TabBtn.Size = UDim2.new(0, game:GetService("TextService"):GetTextSize(name, 13, Theme.Font, Vector2.new(math.huge, 35)).X + 30, 1, 0)
+
+        local function Select()
+            if Window.CurrentTab then
+                Window.CurrentTab.Btn.TextColor3 = Theme.SubText
+                Window.CurrentTab.Page.Visible = false
+            end
+            TabBtn.TextColor3 = Theme.AccentText
+            Page.Visible = true
+            Window.CurrentTab = {Btn = TabBtn, Page = Page}
+            
+            TweenService:Create(TabHighlight, TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                Size = TabBtn.Size, Position = UDim2.new(0, TabBtn.AbsolutePosition.X - TabContainer.AbsolutePosition.X, 0, 0)
+            }):Play()
+        end
+
+        TabBtn.MouseButton1Click:Connect(Select)
+        
+        if not Window.CurrentTab then
+            TabBtn.TextColor3 = Theme.AccentText
+            Page.Visible = true
+            Window.CurrentTab = {Btn = TabBtn, Page = Page}
+            task.spawn(function()
+                task.wait()
+                TabHighlight.Size = TabBtn.Size
+                TabHighlight.Position = UDim2.new(0, TabBtn.AbsolutePosition.X - TabContainer.AbsolutePosition.X, 0, 0)
+            end)
+        end
+
+        function Tab:CreateLabel(text)
+            Create("TextLabel", {
+                Parent = Page, Size = UDim2.new(1, -4, 0, 20), BackgroundTransparency = 1,
+                Text = " " .. text, TextColor3 = Theme.SubText, Font = Enum.Font.GothamBold,
+                TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left
+            })
+        end
+
+        function Tab:CreateButton(text, callback)
+            local Btn = Create("TextButton", {
+                Parent = Page, Size = UDim2.new(1, -4, 0, 50), BackgroundColor3 = Theme.Element,
+                Text = text, TextColor3 = Theme.Text, Font = Theme.Font, TextSize = 14, 
+                TextXAlignment = Enum.TextXAlignment.Left, AutoButtonColor = false
+            })
+            Create("UICorner", {Parent = Btn, CornerRadius = Theme.CornerRadius})
+            Create("UIStroke", {Parent = Btn, Color = Theme.Outline, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border})
+            Create("UIPadding", {Parent = Btn, PaddingLeft = UDim.new(0, 10)})
+            
+            Btn.MouseEnter:Connect(function() TweenService:Create(Btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(40, 40, 40)}):Play() end)
+            Btn.MouseLeave:Connect(function() TweenService:Create(Btn, TweenInfo.new(0.15), {BackgroundColor3 = Theme.Element}):Play() end)
+            
+            Btn.MouseButton1Click:Connect(function()
+                TweenService:Create(Btn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(50, 50, 50)}):Play()
+                task.wait(0.1)
+                TweenService:Create(Btn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(40, 40, 40)}):Play()
+                callback()
+            end)
+            
+            Create("TextLabel", {
+                Parent = Btn, Size = UDim2.new(0, 20, 1, 0), Position = UDim2.new(1, -35, 0, 0),
+                BackgroundTransparency = 1, Text = "↗", TextColor3 = Theme.SubText, 
+                Font = Theme.Font, TextSize = 14
+            })
+        end
+
+        function Tab:CreateTextbox(text, placeholder, callback)
+            local Box = Create("Frame", {Parent = Page, Size = UDim2.new(1, -4, 0, 50), BackgroundColor3 = Theme.Element})
+            Create("UICorner", {Parent = Box, CornerRadius = Theme.CornerRadius})
+            Create("UIStroke", {Parent = Box, Color = Theme.Outline, Thickness = 1})
+            
+            Create("TextLabel", {
+                Parent = Box, Size = UDim2.new(0.5, 0, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1,
+                Text = text, TextColor3 = Theme.Text, Font = Theme.Font, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left
+            })
+            
+            local InputFrame = Create("Frame", {
+                Parent = Box, Size = UDim2.new(0, 100, 0, 30), Position = UDim2.new(1, -110, 0.5, -15),
+                BackgroundColor3 = Theme.Background
+            })
+            Create("UICorner", {Parent = InputFrame, CornerRadius = UDim.new(0, 12)})
+            Create("UIStroke", {Parent = InputFrame, Color = Theme.Outline, Thickness = 1})
+
+            local Input = Create("TextBox", {
+                Parent = InputFrame, Size = UDim2.new(1, -10, 1, 0), Position = UDim2.new(0, 5, 0, 0), BackgroundTransparency = 1,
+                Text = "", PlaceholderText = placeholder, TextColor3 = Theme.Text, Font = Theme.Font, TextSize = 12,
+                ClearTextOnFocus = false
+            })
+            
+            local ClickBox = Create("TextButton", {Parent = Box, Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = ""})
+            ClickBox.MouseButton1Click:Connect(function() Input:CaptureFocus() end)
+            
+            Window.Flags[text] = ""
+            Window.Elements[text] = function(val)
+                Input.Text = val
+                Window.Flags[text] = val
+                callback(val)
+            end
+            
+            Input.FocusLost:Connect(function() 
+                Window.Flags[text] = Input.Text
+                callback(Input.Text) 
+                Window:_queueSave()
+            end)
+        end
+
+        function Tab:CreateSlider(text, min, max, default, callback)
+            local Slider = Create("Frame", {Parent = Page, Size = UDim2.new(1, -4, 0, 50), BackgroundColor3 = Theme.Element})
+            Create("UICorner", {Parent = Slider, CornerRadius = Theme.CornerRadius})
+            Create("UIStroke", {Parent = Slider, Color = Theme.Outline, Thickness = 1})
+            
+            Create("TextLabel", {
+                Parent = Slider, Size = UDim2.new(0.4, 0, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1,
+                Text = text, TextColor3 = Theme.Text, Font = Theme.Font, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left
+            })
+
+            local Track = Create("Frame", {
+                Parent = Slider, Size = UDim2.new(0, 200, 0, 30), Position = UDim2.new(1, -220, 0.5, -15),
+                BackgroundColor3 = Theme.Background
+            })
+            Create("UICorner", {Parent = Track, CornerRadius = UDim.new(1, 0)})
+            Create("UIStroke", {Parent = Track, Color = Theme.SliderOutline, Thickness = 1, Transparency = 0.3})
+
+            local Fill = Create("Frame", {
+                Parent = Track, Size = UDim2.new((default-min)/(max-min), 0, 1, 0), BackgroundColor3 = Color3.fromRGB(255, 255, 255), BackgroundTransparency = 0.3
+            })
+            Create("UIGradient", {Parent = Fill, Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(140, 100, 255)), ColorSequenceKeypoint.new(1, Color3.fromRGB(100, 50, 220))}, Rotation = 90})
+            Create("UICorner", {Parent = Fill, CornerRadius = UDim.new(1, 0)})
+
+            local ValLabel = Create("TextLabel", {
+                Parent = Track, Size = UDim2.new(1, -12, 1, 0), Position = UDim2.new(0, 12, 0, 0), BackgroundTransparency = 1,
+                Text = tostring(default), TextColor3 = Theme.Text, Font = Enum.Font.GothamBold, TextSize = 12, ZIndex = 2,
+                TextXAlignment = Enum.TextXAlignment.Left
+            })
+
+            local Btn = Create("TextButton", {Parent = Slider, Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = ""})
+            
+            local sliding = false
+            
+            Window.Flags[text] = default
+            local function setSlider(val)
+                local percent = math.clamp((val - min) / (max - min), 0, 1)
+                Fill.Size = UDim2.new(percent, 0, 1, 0)
+                ValLabel.Text = tostring(math.floor(val))
+                Window.Flags[text] = math.floor(val)
+                callback(math.floor(val))
+                Window:_queueSave()
+            end
+            Window.Elements[text] = setSlider
+
+            local function updateSlider(input)
+                local percent = math.clamp((input.Position.X - Track.AbsolutePosition.X) / Track.AbsoluteSize.X, 0, 1)
+                local value = math.floor(min + ((max - min) * percent))
+                setSlider(value)
+            end
+
+            Btn.InputBegan:Connect(function(input) 
+                if input.UserInputType == Enum.UserInputType.MouseButton1 then 
+                    sliding = true 
+                    updateSlider(input)
+                end 
+            end)
+            
+            UserInputService.InputEnded:Connect(function(input) 
+                if input.UserInputType == Enum.UserInputType.MouseButton1 then 
+                    sliding = false 
+                end 
+            end)
+            
+            UserInputService.InputChanged:Connect(function(input)
+                if sliding and input.UserInputType == Enum.UserInputType.MouseMovement then
+                    updateSlider(input)
+                end
+            end)
+        end
+
+        function Tab:CreateToggle(text, callback)
+            local state = false
+            local Tog = Create("Frame", {Parent = Page, Size = UDim2.new(1, -4, 0, 50), BackgroundColor3 = Theme.Element})
+            Create("UICorner", {Parent = Tog, CornerRadius = Theme.CornerRadius})
+            Create("UIStroke", {Parent = Tog, Color = Theme.Outline, Thickness = 1})
+            
+            Create("TextLabel", {
+                Parent = Tog, Size = UDim2.new(0.5, 0, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1,
+                Text = text, TextColor3 = Theme.Text, Font = Theme.Font, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left
+            })
+            
+            local Indicator = Create("Frame", {
+                Parent = Tog, Size = UDim2.new(0, 28, 0, 28), Position = UDim2.new(1, -38, 0.5, -14),
+                BackgroundColor3 = Theme.Background
+            })
+            Create("UICorner", {Parent = Indicator, CornerRadius = UDim.new(0, 6)})
+            Create("UIStroke", {Parent = Indicator, Color = Theme.Outline, Thickness = 1})
+            
+            local Fill = Create("Frame", {
+                Parent = Indicator, Size = UDim2.new(0, 0, 0, 0), Position = UDim2.new(0.5, 0, 0.5, 0),
+                BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+            })
+            Create("UIGradient", {Parent = Fill, Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(140, 100, 255)), ColorSequenceKeypoint.new(1, Color3.fromRGB(100, 50, 220))}, Rotation = 90})
+            Create("UICorner", {Parent = Fill, CornerRadius = UDim.new(0, 4)})
+
+            Window.Flags[text] = false
+            local function setToggle(val)
+                state = val
+                Window.Flags[text] = state
+                if state then
+                    TweenService:Create(Fill, TweenInfo.new(0.15), {Size = UDim2.new(1, -6, 1, -6), Position = UDim2.new(0, 3, 0, 3)}):Play()
+                    TweenService:Create(Indicator:FindFirstChildOfClass("UIStroke"), TweenInfo.new(0.15), {Color = Theme.SliderOutline}):Play()
+                else
+                    TweenService:Create(Fill, TweenInfo.new(0.15), {Size = UDim2.new(0, 0, 0, 0), Position = UDim2.new(0.5, 0, 0.5, 0)}):Play()
+                    TweenService:Create(Indicator:FindFirstChildOfClass("UIStroke"), TweenInfo.new(0.15), {Color = Theme.Outline}):Play()
+                end
+                callback(state)
+                Window:_queueSave()
+            end
+            Window.Elements[text] = setToggle
+
+            local Btn = Create("TextButton", {Parent = Tog, Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = ""})
+            Btn.MouseButton1Click:Connect(function()
+                setToggle(not state)
+            end)
+        end
+
+        function Tab:CreateDropdown(text, options, arg3, arg4)
+            local multiSelect = false
+            local callback = arg3
+            if type(arg3) == "boolean" then
+                multiSelect = arg3
+                callback = arg4
+            end
+            
+            local expanded = false
+            local selected = {}
+            local Drop = Create("Frame", {Parent = Page, Size = UDim2.new(1, -4, 0, 50), BackgroundColor3 = Theme.Element, ClipsDescendants = true})
+            Create("UICorner", {Parent = Drop, CornerRadius = Theme.CornerRadius})
+            Create("UIStroke", {Parent = Drop, Color = Theme.Outline, Thickness = 1})
+            
+            local DropBtn = Create("TextButton", {
+                Parent = Drop, Size = UDim2.new(1, 0, 0, 50), BackgroundTransparency = 1,
+                Text = text .. " ▼", TextColor3 = Theme.Text, Font = Theme.Font, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left
+            })
+            Create("UIPadding", {Parent = DropBtn, PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10)})
+            
+            local Container = Create("Frame", {
+                Parent = Drop, Size = UDim2.new(1, -20, 1, -50), Position = UDim2.new(0, 10, 0, 50), BackgroundTransparency = 1
+            })
+            local List = Create("UIListLayout", {Parent = Container, SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 5)})
+            
+            local function updateSize()
+                TweenService:Create(Drop, TweenInfo.new(0.2), {Size = expanded and UDim2.new(1, -4, 0, 50 + (#options * 32) + (#options * 5) + 5) or UDim2.new(1, -4, 0, 50)}):Play()
+            end
+            
+            local function updateText()
+                local display = #selected > 0 and table.concat(selected, ", ") or ""
+                DropBtn.Text = (display == "" and text or (text .. " : " .. display)) .. (expanded and " ▲" or " ▼")
+            end
+            
+            Window.Flags[text] = multiSelect and {} or ""
+            local function setDropdown(val)
+                if multiSelect then
+                    selected = type(val) == "table" and val or {val}
+                    Window.Flags[text] = selected
+                else
+                    selected = {type(val) == "table" and val[1] or val}
+                    Window.Flags[text] = selected[1]
+                end
+                updateText()
+                for _, child in ipairs(Container:GetChildren()) do
+                    if child:IsA("TextButton") then
+                        local isSel = table.find(selected, child.Text) ~= nil
+                        TweenService:Create(child, TweenInfo.new(0.15), {
+                            TextColor3 = isSel and Theme.Text or Theme.SubText, 
+                            BackgroundColor3 = isSel and Theme.SliderFill or Color3.fromRGB(38, 38, 38)
+                        }):Play()
+                    end
+                end
+                callback(multiSelect and selected or Window.Flags[text])
+                Window:_queueSave()
+            end
+            Window.Elements[text] = setDropdown
+
+            DropBtn.MouseButton1Click:Connect(function()
+                expanded = not expanded
+                updateText()
+                updateSize()
+            end)
+            
+            for _, opt in ipairs(options) do
+                local OptBtn = Create("TextButton", {
+                    Parent = Container, Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = Color3.fromRGB(38, 38, 38),
+                    Text = opt, TextColor3 = Theme.SubText, Font = Theme.Font, TextSize = 13
+                })
+                Create("UICorner", {Parent = OptBtn, CornerRadius = UDim.new(0, 6)})
+                Create("UIStroke", {Parent = OptBtn, Color = Theme.Outline, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border})
+                
+                local function isSelected() return table.find(selected, opt) ~= nil end
+
+                OptBtn.MouseEnter:Connect(function() 
+                    if not isSelected() then
+                        TweenService:Create(OptBtn, TweenInfo.new(0.15), {TextColor3 = Theme.Text, BackgroundColor3 = Color3.fromRGB(48, 48, 48)}):Play() 
+                    end
+                end)
+                OptBtn.MouseLeave:Connect(function() 
+                    if not isSelected() then
+                        TweenService:Create(OptBtn, TweenInfo.new(0.15), {TextColor3 = Theme.SubText, BackgroundColor3 = Color3.fromRGB(38, 38, 38)}):Play() 
+                    end
+                end)
+                
+                OptBtn.MouseButton1Click:Connect(function()
+                    if multiSelect then
+                        local temp = {}
+                        for _, v in ipairs(selected) do table.insert(temp, v) end
+                        if isSelected() then
+                            table.remove(temp, table.find(temp, opt))
+                        else
+                            table.insert(temp, opt)
+                        end
+                        setDropdown(temp)
+                    else
+                        expanded = false
+                        updateSize()
+                        setDropdown(opt)
+                    end
+                end)
+            end
+        end
+
+        return Tab
+    end
+    return Window
+end
+
+return Library
