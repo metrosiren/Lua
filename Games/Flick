@@ -9,7 +9,7 @@ local LocalPlayer = Players.LocalPlayer
 
 --// Load Prism UI
 local Prism = loadstring(game:HttpGet("https://raw.githubusercontent.com/metrosiren/Lua/refs/heads/main/Prism"))()
-local Window = Prism:CreateWindow("Flick", nil, nil, true)
+local Window = Prism:CreateWindow("Flick", "hjzsM6Sb2qZ8", nil, true)
 
 --// State
 local Settings = {
