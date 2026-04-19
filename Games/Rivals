@@ -1,0 +1,925 @@
+--// Rivals
+--// github.com/metrosiren
+
+local Prism = loadstring(game:HttpGet("https://raw.githubusercontent.com/metrosiren/Lua/refs/heads/main/Prism"))()
+local Window = Prism:CreateWindow("Rivals", nil, 0, true)
+
+--// Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local Camera = Workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+
+--// Settings
+local Settings = {
+	Aimbot = false,
+	AimSmoothness = 2,
+	AimHumanize = false,
+	AimFOV = 200,
+	AimPart = "Head",
+	AimVisibleOnly = true,
+	AimMaxDistance = 0,
+	AimMode = "Hold",
+	AimKey = Enum.UserInputType.MouseButton2,
+	AimActive = false,
+	Triggerbot = false,
+	TriggerbotDelay = 50,
+
+	ESP = true,
+	ESPVisibleOnly = false,
+	ESPMaxDistance = 750,
+	ESPBox = true,
+	ESPName = true,
+	ESPSkeleton = true,
+	ESPHealthBar = true,
+	ESPDistance = false,
+	ESPColor = Color3.fromRGB(255, 50, 50),
+	ESPBoxThickness = 1,
+	ESPSkeletonThickness = 1,
+	ESPTextSize = 14,
+	ESPFillOpacity = 1,
+	ESPOutlineOpacity = 0,
+
+	WalkSpeed = 16,
+	JumpPower = 50,
+	InfJump = false,
+	TPToCursor = true,
+	TPToCursorKey = Enum.KeyCode.T,
+	AntiFOV = false,
+	AntiFOVDistance = 8,
+	AntiFOVMaxDistance = 750,
+	Autofarm = false,
+	AutofarmSpeed = 100,
+	AutofarmMaxDistance = 750,
+}
+
+--// R15 Skeleton Connections
+local SkeletonJoints = {
+	{"Head", "UpperTorso"}, {"UpperTorso", "LowerTorso"},
+	{"UpperTorso", "LeftUpperArm"}, {"UpperTorso", "RightUpperArm"},
+	{"LeftUpperArm", "LeftLowerArm"}, {"LeftLowerArm", "LeftHand"},
+	{"RightUpperArm", "RightLowerArm"}, {"RightLowerArm", "RightHand"},
+	{"LowerTorso", "LeftUpperLeg"}, {"LowerTorso", "RightUpperLeg"},
+	{"LeftUpperLeg", "LeftLowerLeg"}, {"LeftLowerLeg", "LeftFoot"},
+	{"RightUpperLeg", "RightLowerLeg"}, {"RightLowerLeg", "RightFoot"},
+}
+
+--// ESP Cache
+local ESPObjects = {} -- [Player] = { Highlight, NameGui, BoxLines, SkeletonLines }
+
+--// Utility
+local function getCharacter(player)
+	-- Rivals spawns entities under Assets.Temp.Entities or default character
+	local char = player.Character
+	if char and char:FindFirstChild("HumanoidRootPart") then
+		return char
+	end
+	-- Check entities folder
+	local entities = Workspace:FindFirstChild("Assets")
+		and Workspace.Assets:FindFirstChild("Temp")
+		and Workspace.Assets.Temp:FindFirstChild("Entities")
+	if entities then
+		for _, ent in entities:GetChildren() do
+			if ent.Name == player.Name and ent:FindFirstChild("HumanoidRootPart") then
+				return ent
+			end
+		end
+	end
+	return char
+end
+
+local function isAlive(player)
+	local char = getCharacter(player)
+	if not char then return false end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	return hum and hum.Health > 0
+end
+
+local function worldToScreen(pos)
+	local vec, onScreen = Camera:WorldToViewportPoint(pos)
+	return Vector2.new(vec.X, vec.Y), onScreen, vec.Z
+end
+
+local function isVisible(part)
+	local origin = Camera.CFrame.Position
+	local dir = (part.Position - origin)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	local localChar = LocalPlayer.Character
+	params.FilterDescendantsInstances = localChar and {localChar} or {}
+	local result = Workspace:Raycast(origin, dir, params)
+	if not result then return true end
+	return result.Instance:IsDescendantOf(part.Parent)
+end
+
+local function getDistance(player)
+	local char = getCharacter(player)
+	if not char then return math.huge end
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if not root then return math.huge end
+	local localChar = LocalPlayer.Character
+	if not localChar or not localChar:FindFirstChild("HumanoidRootPart") then return math.huge end
+	return (root.Position - localChar.HumanoidRootPart.Position).Magnitude
+end
+
+--// In-Match Detection
+local LOBBY_Y = -600 -- lobby is deep underground (~-635)
+
+local function isInMatch()
+	local char = LocalPlayer.Character
+	if not char then return false end
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if not root then return false end
+	-- In lobby, Y is around -635. In match, maps are above ground.
+	if root.Position.Y < LOBBY_Y then return false end
+	-- Also check if fighter HUD elements are active
+	local pg = LocalPlayer:FindFirstChild("PlayerGui")
+	if pg then
+		for _, gui in pg:GetChildren() do
+			if gui:IsA("ScreenGui") then
+				local scoreboard = gui:FindFirstChild("Scoreboard", true)
+				local timer = gui:FindFirstChild("Timer", true)
+				if scoreboard or timer then
+					if (scoreboard and scoreboard.Visible) or (timer and timer.Visible) then
+						return true
+					end
+				end
+			end
+		end
+	end
+	-- Fallback: above lobby Y = probably in match
+	return root.Position.Y > LOBBY_Y
+end
+
+--// Look at target using mousemoverel (shared by anti-fov & autofarm)
+local function lookAtTarget(targetPos)
+	local screenPos, onScreen = worldToScreen(targetPos)
+	if not onScreen then return end
+	local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+	local delta = screenPos - center
+	mousemoverel(math.floor(delta.X / 2), math.floor(delta.Y / 2))
+end
+
+local function getNearestEnemyRoot()
+	local localChar = LocalPlayer.Character
+	if not localChar then return nil end
+	local localRoot = localChar:FindFirstChild("HumanoidRootPart")
+	if not localRoot then return nil end
+	local closest, closestDist = nil, math.huge
+	for _, player in Players:GetPlayers() do
+		if player == LocalPlayer then continue end
+		if not isAlive(player) then continue end
+		local char = getCharacter(player)
+		if not char then continue end
+		local root = char:FindFirstChild("HumanoidRootPart")
+		if not root then continue end
+		local d = (root.Position - localRoot.Position).Magnitude
+		if d < closestDist then
+			closest = root
+			closestDist = d
+		end
+	end
+	return closest
+end
+
+--// FOV Circle
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Thickness = 1
+FOVCircle.NumSides = 64
+FOVCircle.Filled = false
+FOVCircle.Transparency = 0.7
+FOVCircle.Color = Color3.fromRGB(255, 255, 255)
+FOVCircle.Visible = false
+
+--// Aimbot
+local function getClosestPlayer()
+	local closest, closestDist = nil, Settings.AimFOV
+	local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+	for _, player in Players:GetPlayers() do
+		if player == LocalPlayer then continue end
+		if not isAlive(player) then continue end
+		local char = getCharacter(player)
+		if not char then continue end
+		local part = char:FindFirstChild(Settings.AimPart) or char:FindFirstChild("Head")
+		if not part then continue end
+
+		local screenPos, onScreen = worldToScreen(part.Position)
+		if not onScreen then continue end
+		if Settings.AimVisibleOnly and not isVisible(part) then continue end
+		if Settings.AimMaxDistance > 0 and getDistance(player) > Settings.AimMaxDistance then continue end
+
+		local dist = (screenPos - center).Magnitude
+		if dist < closestDist then
+			closest = player
+			closestDist = dist
+		end
+	end
+
+	return closest
+end
+
+local function aimAt(target)
+	local char = getCharacter(target)
+	if not char then return end
+	local part = char:FindFirstChild(Settings.AimPart) or char:FindFirstChild("Head")
+	if not part then return end
+
+	local screenPos, onScreen = worldToScreen(part.Position)
+	if not onScreen then return end
+
+	local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+	local delta = screenPos - center
+
+	local smooth = math.clamp(Settings.AimSmoothness, 1, 20)
+	local move = delta / smooth
+
+	if Settings.AimHumanize then
+		move = move + Vector2.new(math.random(-2, 2), math.random(-2, 2))
+	end
+
+	mousemoverel(math.floor(move.X), math.floor(move.Y))
+end
+
+--// ESP Functions
+local function createESP(player)
+	if ESPObjects[player] then return end
+
+	local obj = {
+		Highlight = Instance.new("Highlight"),
+		NameText = Drawing.new("Text"),
+		DistText = Drawing.new("Text"),
+		BoxLines = {},
+		SkeletonLines = {},
+		HealthBarBG = Drawing.new("Line"),
+		HealthBarFG = Drawing.new("Line"),
+	}
+
+	obj.Highlight.FillTransparency = Settings.ESPFillOpacity
+	obj.Highlight.OutlineColor = Settings.ESPColor
+	obj.Highlight.OutlineTransparency = Settings.ESPOutlineOpacity
+	obj.Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	obj.Highlight.Enabled = false
+
+	obj.NameText.Size = Settings.ESPTextSize
+	obj.NameText.Center = true
+	obj.NameText.Outline = true
+	obj.NameText.Color = Color3.new(1, 1, 1)
+	obj.NameText.Visible = false
+	obj.NameText.Text = player.DisplayName
+
+	obj.DistText.Size = Settings.ESPTextSize - 2
+	obj.DistText.Center = true
+	obj.DistText.Outline = true
+	obj.DistText.Color = Color3.fromRGB(200, 200, 200)
+	obj.DistText.Visible = false
+
+	obj.HealthBarBG.Thickness = 3
+	obj.HealthBarBG.Color = Color3.fromRGB(30, 30, 30)
+	obj.HealthBarBG.Visible = false
+
+	obj.HealthBarFG.Thickness = 1
+	obj.HealthBarFG.Color = Color3.fromRGB(0, 255, 0)
+	obj.HealthBarFG.Visible = false
+
+	for i = 1, 4 do
+		local line = Drawing.new("Line")
+		line.Thickness = Settings.ESPBoxThickness
+		line.Color = Settings.ESPColor
+		line.Visible = false
+		obj.BoxLines[i] = line
+	end
+
+	for i = 1, #SkeletonJoints do
+		local line = Drawing.new("Line")
+		line.Thickness = Settings.ESPSkeletonThickness
+		line.Color = Settings.ESPColor
+		line.Visible = false
+		obj.SkeletonLines[i] = line
+	end
+
+	ESPObjects[player] = obj
+end
+
+local function removeESP(player)
+	local obj = ESPObjects[player]
+	if not obj then return end
+
+	obj.Highlight:Destroy()
+	obj.NameText:Remove()
+	obj.DistText:Remove()
+	obj.HealthBarBG:Remove()
+	obj.HealthBarFG:Remove()
+	for _, l in obj.BoxLines do l:Remove() end
+	for _, l in obj.SkeletonLines do l:Remove() end
+	ESPObjects[player] = nil
+end
+
+local function hideAllESP(obj)
+	obj.Highlight.Enabled = false
+	obj.NameText.Visible = false
+	obj.DistText.Visible = false
+	obj.HealthBarBG.Visible = false
+	obj.HealthBarFG.Visible = false
+	for _, l in obj.BoxLines do l.Visible = false end
+	for _, l in obj.SkeletonLines do l.Visible = false end
+end
+
+local function getHealthColor(ratio)
+	return Color3.fromRGB(
+		math.floor(255 * math.clamp(1 - ratio, 0, 1)),
+		math.floor(255 * math.clamp(ratio, 0, 1)),
+		0
+	)
+end
+
+local function updateESP(player)
+	local obj = ESPObjects[player]
+	if not obj then return end
+
+	local char = getCharacter(player)
+	local alive = char and isAlive(player)
+	local root = alive and char:FindFirstChild("HumanoidRootPart")
+	local head = alive and char:FindFirstChild("Head")
+	local hum = alive and char:FindFirstChildOfClass("Humanoid")
+
+	if not alive or not root then
+		hideAllESP(obj)
+		return
+	end
+
+	local dist = getDistance(player)
+
+	if Settings.ESPMaxDistance > 0 and dist > Settings.ESPMaxDistance then
+		hideAllESP(obj)
+		return
+	end
+
+	if Settings.ESPVisibleOnly and not isVisible(root) then
+		hideAllESP(obj)
+		return
+	end
+
+	local rootScreen, onScreen, depth = worldToScreen(root.Position)
+	if not onScreen or depth < 0 then
+		hideAllESP(obj)
+		return
+	end
+
+	-- Bounding dimensions (reused by box, health bar, name, distance)
+	local headScreen = head and worldToScreen(head.Position + Vector3.new(0, 1, 0)) or rootScreen
+	local footScreen = worldToScreen(root.Position - Vector3.new(0, 3, 0))
+	local height = math.abs(headScreen.Y - footScreen.Y)
+	local width = height / 2
+
+	-- Highlight
+	if Settings.ESP then
+		obj.Highlight.Adornee = char
+		obj.Highlight.Enabled = true
+		obj.Highlight.OutlineColor = Settings.ESPColor
+		obj.Highlight.FillTransparency = Settings.ESPFillOpacity
+		obj.Highlight.OutlineTransparency = Settings.ESPOutlineOpacity
+	else
+		obj.Highlight.Enabled = false
+	end
+
+	-- Box ESP
+	if Settings.ESPBox then
+		local topLeft = Vector2.new(rootScreen.X - width / 2, headScreen.Y)
+		local topRight = Vector2.new(rootScreen.X + width / 2, headScreen.Y)
+		local botLeft = Vector2.new(rootScreen.X - width / 2, footScreen.Y)
+		local botRight = Vector2.new(rootScreen.X + width / 2, footScreen.Y)
+
+		obj.BoxLines[1].From = topLeft; obj.BoxLines[1].To = topRight
+		obj.BoxLines[2].From = topRight; obj.BoxLines[2].To = botRight
+		obj.BoxLines[3].From = botRight; obj.BoxLines[3].To = botLeft
+		obj.BoxLines[4].From = botLeft; obj.BoxLines[4].To = topLeft
+
+		for _, l in obj.BoxLines do
+			l.Color = Settings.ESPColor
+			l.Thickness = Settings.ESPBoxThickness
+			l.Visible = true
+		end
+	else
+		for _, l in obj.BoxLines do l.Visible = false end
+	end
+
+	-- Health Bar (left side of box)
+	if Settings.ESPHealthBar and hum then
+		local ratio = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
+		local barX = rootScreen.X - width / 2 - 5
+		local barTop = headScreen.Y
+		local barBot = footScreen.Y
+		local barFilledBot = barBot - (barBot - barTop) * ratio
+
+		obj.HealthBarBG.From = Vector2.new(barX, barTop)
+		obj.HealthBarBG.To = Vector2.new(barX, barBot)
+		obj.HealthBarBG.Visible = true
+
+		obj.HealthBarFG.From = Vector2.new(barX, barFilledBot)
+		obj.HealthBarFG.To = Vector2.new(barX, barBot)
+		obj.HealthBarFG.Color = getHealthColor(ratio)
+		obj.HealthBarFG.Visible = true
+	else
+		obj.HealthBarBG.Visible = false
+		obj.HealthBarFG.Visible = false
+	end
+
+	-- Name ESP
+	if Settings.ESPName then
+		local nameY = headScreen.Y - Settings.ESPTextSize - 2
+		obj.NameText.Text = player.DisplayName
+		obj.NameText.Position = Vector2.new(rootScreen.X, nameY)
+		obj.NameText.Size = Settings.ESPTextSize
+		obj.NameText.Visible = true
+	else
+		obj.NameText.Visible = false
+	end
+
+	-- Distance ESP
+	if Settings.ESPDistance then
+		obj.DistText.Text = string.format("%dm", math.floor(dist))
+		obj.DistText.Position = Vector2.new(rootScreen.X, footScreen.Y + 2)
+		obj.DistText.Size = Settings.ESPTextSize - 2
+		obj.DistText.Visible = true
+	else
+		obj.DistText.Visible = false
+	end
+
+	-- Skeleton ESP
+	if Settings.ESPSkeleton then
+		for i, joint in SkeletonJoints do
+			local partA = char:FindFirstChild(joint[1])
+			local partB = char:FindFirstChild(joint[2])
+			if partA and partB then
+				local sA, onA = worldToScreen(partA.Position)
+				local sB, onB = worldToScreen(partB.Position)
+				if onA and onB then
+					obj.SkeletonLines[i].From = sA
+					obj.SkeletonLines[i].To = sB
+					obj.SkeletonLines[i].Color = Settings.ESPColor
+					obj.SkeletonLines[i].Thickness = Settings.ESPSkeletonThickness
+					obj.SkeletonLines[i].Visible = true
+				else
+					obj.SkeletonLines[i].Visible = false
+				end
+			else
+				obj.SkeletonLines[i].Visible = false
+			end
+		end
+	else
+		for _, l in obj.SkeletonLines do l.Visible = false end
+	end
+end
+
+--// Player Connections
+for _, player in Players:GetPlayers() do
+	if player ~= LocalPlayer then
+		createESP(player)
+	end
+end
+
+Players.PlayerAdded:Connect(function(player)
+	createESP(player)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	removeESP(player)
+end)
+
+--// Aim Key Input
+local function isAimKeyInput(input)
+	if typeof(Settings.AimKey) == "EnumItem" then
+		return input.UserInputType == Settings.AimKey or input.KeyCode == Settings.AimKey
+	end
+	return false
+end
+
+UserInputService.InputBegan:Connect(function(input, gpe)
+	if gpe then return end
+	if not isAimKeyInput(input) then return end
+	if Settings.AimMode == "Toggle" then
+		Settings.AimActive = not Settings.AimActive
+	else
+		Settings.AimActive = true
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if not isAimKeyInput(input) then return end
+	if Settings.AimMode == "Hold" then
+		Settings.AimActive = false
+	end
+end)
+
+--// Triggerbot
+local lastTrigger = 0
+local function tryTriggerbot()
+	if not Settings.Triggerbot then return end
+	local now = tick() * 1000
+	if now - lastTrigger < Settings.TriggerbotDelay then return end
+
+	local target = getClosestPlayer()
+	if not target then return end
+	local char = getCharacter(target)
+	if not char then return end
+	local part = char:FindFirstChild(Settings.AimPart) or char:FindFirstChild("Head")
+	if not part then return end
+
+	local screenPos, onScreen = worldToScreen(part.Position)
+	if not onScreen then return end
+	local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+	if (screenPos - center).Magnitude < 15 then
+		mouse1click()
+		lastTrigger = now
+	end
+end
+
+--// WalkSpeed / JumpPower Override
+local function hookHumanoid(hum)
+	hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+		if hum.WalkSpeed ~= Settings.WalkSpeed then
+			hum.WalkSpeed = Settings.WalkSpeed
+		end
+	end)
+	hum:GetPropertyChangedSignal("JumpPower"):Connect(function()
+		if hum.JumpPower ~= Settings.JumpPower then
+			hum.JumpPower = Settings.JumpPower
+		end
+	end)
+	hum.WalkSpeed = Settings.WalkSpeed
+	hum.JumpPower = Settings.JumpPower
+end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+	local hum = char:WaitForChild("Humanoid", 10)
+	if hum then hookHumanoid(hum) end
+end)
+
+if LocalPlayer.Character then
+	local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+	if hum then hookHumanoid(hum) end
+end
+
+--// Infinite Jump
+UserInputService.JumpRequest:Connect(function()
+	if not Settings.InfJump then return end
+	local char = LocalPlayer.Character
+	if not char then return end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if hum then
+		hum:ChangeState(Enum.HumanoidStateType.Jumping)
+	end
+end)
+
+--// TP to Cursor
+UserInputService.InputBegan:Connect(function(input, gpe)
+	if gpe then return end
+	if not Settings.TPToCursor then return end
+	if input.KeyCode ~= Settings.TPToCursorKey then return end
+	local char = LocalPlayer.Character
+	if not char then return end
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+	local mouse = LocalPlayer:GetMouse()
+	if mouse.Hit then
+		root.CFrame = mouse.Hit + Vector3.new(0, 3, 0)
+	end
+end)
+
+--// Anti-FOV: stay behind nearest enemy, face them, avoid hazards
+local hazardCache = {}
+local lastHazardScan = 0
+
+local function refreshHazardCache()
+	local now = tick()
+	if now - lastHazardScan < 1 then return end -- refresh once per second
+	lastHazardScan = now
+	table.clear(hazardCache)
+	for _, obj in Workspace:GetDescendants() do
+		if obj:IsA("BasePart") then
+			local n = obj.Name:lower()
+			if string.find(n, "molotov") or string.find(n, "fire") or string.find(n, "flame") or string.find(n, "burn") or string.find(n, "lava") then
+				table.insert(hazardCache, obj)
+			end
+		end
+	end
+end
+
+local function isHazardNearby(pos, radius)
+	for _, obj in hazardCache do
+		if obj.Parent and (obj.Position - pos).Magnitude < radius then
+			return true
+		end
+	end
+	return false
+end
+
+local function getAntiFOVPosition()
+	local localChar = LocalPlayer.Character
+	if not localChar then return nil end
+	local localRoot = localChar:FindFirstChild("HumanoidRootPart")
+	if not localRoot then return nil end
+
+	refreshHazardCache()
+
+	local closest, closestDist = nil, math.huge
+	for _, player in Players:GetPlayers() do
+		if player == LocalPlayer then continue end
+		if not isAlive(player) then continue end
+		local char = getCharacter(player)
+		if not char then continue end
+		local root = char:FindFirstChild("HumanoidRootPart")
+		if not root then continue end
+		local d = (root.Position - localRoot.Position).Magnitude
+		if d < closestDist then
+			closest = root
+			closestDist = d
+		end
+	end
+
+	if not closest then return nil end
+	if Settings.AntiFOVMaxDistance > 0 and closestDist > Settings.AntiFOVMaxDistance then return nil end
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = {localChar, closest.Parent}
+
+	local dist = Settings.AntiFOVDistance
+	local angles = {0, 30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180}
+	local elevate = 6 -- studs above enemy head
+
+	for _, angle in angles do
+		local rad = math.rad(angle)
+		local behindDir = -closest.CFrame.LookVector
+		local flat = Vector3.new(behindDir.X, 0, behindDir.Z)
+		if flat.Magnitude < 0.01 then flat = Vector3.new(0, 0, -1) end
+		flat = flat.Unit
+		local rotated = (CFrame.Angles(0, rad, 0) * flat)
+		local targetPos = closest.Position + rotated * dist + Vector3.new(0, elevate, 0)
+
+		-- Wall check from enemy to target
+		local dir = targetPos - closest.Position
+		local ray = Workspace:Raycast(closest.Position, dir, params)
+		if ray and (ray.Position - closest.Position).Magnitude < dir.Magnitude * 0.8 then
+			continue -- too close to wall, skip this angle
+		end
+
+		-- Hazard check
+		if isHazardNearby(targetPos, 10) then continue end
+
+		-- Face the enemy
+		local lookAt = Vector3.new(closest.Position.X, targetPos.Y, closest.Position.Z)
+		return CFrame.new(targetPos, lookAt)
+	end
+
+	return nil
+end
+
+--// Main Loop
+RunService.RenderStepped:Connect(function()
+	Camera = Workspace.CurrentCamera
+
+	-- Anti-FOV (only in match)
+	if Settings.AntiFOV and isInMatch() then
+		local cf = getAntiFOVPosition()
+		if cf then
+			local localChar = LocalPlayer.Character
+			local localRoot = localChar and localChar:FindFirstChild("HumanoidRootPart")
+			if localRoot then
+				localRoot.CFrame = cf
+				local enemy = getNearestEnemyRoot()
+				if enemy then
+					lookAtTarget(enemy.Position)
+				end
+			end
+		end
+	end
+
+	-- Autofarm (only in match)
+	if Settings.Autofarm and isInMatch() then
+		local localChar = LocalPlayer.Character
+		local localRoot = localChar and localChar:FindFirstChild("HumanoidRootPart")
+		if localRoot then
+			-- Find lowest health ALIVE enemy within max distance
+			local enemy = nil
+			local lowestHP = math.huge
+			for _, player in Players:GetPlayers() do
+				if player == LocalPlayer then continue end
+				if not isAlive(player) then continue end
+				local char = getCharacter(player)
+				if not char then continue end
+				local root = char:FindFirstChild("HumanoidRootPart")
+				if not root then continue end
+				local hum = char:FindFirstChildOfClass("Humanoid")
+				if not hum then continue end
+				local d = (root.Position - localRoot.Position).Magnitude
+				if Settings.AutofarmMaxDistance > 0 and d > Settings.AutofarmMaxDistance then continue end
+				if hum.Health < lowestHP then
+					enemy = root
+					lowestHP = hum.Health
+				end
+			end
+
+			if enemy then
+				-- Hover high above the enemy
+				local hoverHeight = 50
+				local targetPos = enemy.Position + Vector3.new(0, hoverHeight, 0)
+				local dir = (targetPos - localRoot.Position)
+				if dir.Magnitude > 2 then
+					local step = dir.Unit * math.min(dir.Magnitude, Settings.AutofarmSpeed / 60)
+					localRoot.CFrame = CFrame.new(localRoot.Position + step)
+				else
+					localRoot.CFrame = CFrame.new(targetPos)
+				end
+				lookAtTarget(enemy.Position)
+			end
+		end
+	end
+
+	-- FOV Circle
+	FOVCircle.Radius = Settings.AimFOV
+	FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+	FOVCircle.Visible = Settings.Aimbot
+
+	-- Aimbot (only in match)
+	if Settings.Aimbot and Settings.AimActive and isInMatch() then
+		local target = getClosestPlayer()
+		if target then
+			aimAt(target)
+		end
+	end
+
+	-- Triggerbot
+	tryTriggerbot()
+
+	-- ESP Update
+	for player, _ in ESPObjects do
+		updateESP(player)
+	end
+end)
+
+--// UI
+local AimTab = Window:CreateTab("Aimbot")
+local ESPTab = Window:CreateTab("Visuals")
+local ESPStyleTab = Window:CreateTab("ESP Style")
+local MoveTab = Window:CreateTab("Movement")
+
+-- Aimbot Tab: Core → Config → Filters
+AimTab:CreateToggle("Aimbot", function(v)
+	Settings.Aimbot = v
+end)
+
+AimTab:CreateDropdown("Aim Part", {"Head", "UpperTorso", "HumanoidRootPart"}, function(v)
+	Settings.AimPart = v
+end)
+
+AimTab:CreateDropdown("Aim Mode", {"Hold", "Toggle"}, function(v)
+	Settings.AimMode = v
+	Settings.AimActive = false
+end)
+
+AimTab:CreateDropdown("Aim Key", {"MouseButton2", "MouseButton1", "E", "Q", "X", "C"}, function(v)
+	local keyMap = {
+		MouseButton2 = Enum.UserInputType.MouseButton2,
+		MouseButton1 = Enum.UserInputType.MouseButton1,
+		E = Enum.KeyCode.E,
+		Q = Enum.KeyCode.Q,
+		X = Enum.KeyCode.X,
+		C = Enum.KeyCode.C,
+	}
+	Settings.AimKey = keyMap[v] or Enum.UserInputType.MouseButton2
+	Settings.AimActive = false
+end)
+
+AimTab:CreateSlider("Smoothness", 1, 20, Settings.AimSmoothness, function(v)
+	Settings.AimSmoothness = v
+end)
+
+AimTab:CreateSlider("FOV Radius", 50, 600, Settings.AimFOV, function(v)
+	Settings.AimFOV = v
+end)
+
+AimTab:CreateToggle("Humanize", function(v)
+	Settings.AimHumanize = v
+end)
+
+AimTab:CreateToggle("Visible Only", function(v)
+	Settings.AimVisibleOnly = v
+end)
+
+AimTab:CreateSlider("Max Distance", 0, 2000, Settings.AimMaxDistance, function(v)
+	Settings.AimMaxDistance = v
+end)
+
+AimTab:CreateToggle("Triggerbot", function(v)
+	Settings.Triggerbot = v
+end)
+
+AimTab:CreateSlider("Trigger Delay (ms)", 0, 500, Settings.TriggerbotDelay, function(v)
+	Settings.TriggerbotDelay = v
+end)
+
+-- Visuals Tab: Toggles → Filters
+ESPTab:CreateToggle("Highlight", function(v)
+	Settings.ESP = v
+end)
+
+ESPTab:CreateToggle("Box", function(v)
+	Settings.ESPBox = v
+end)
+
+ESPTab:CreateToggle("Name", function(v)
+	Settings.ESPName = v
+end)
+
+ESPTab:CreateToggle("Health Bar", function(v)
+	Settings.ESPHealthBar = v
+end)
+
+ESPTab:CreateToggle("Distance", function(v)
+	Settings.ESPDistance = v
+end)
+
+ESPTab:CreateToggle("Skeleton", function(v)
+	Settings.ESPSkeleton = v
+end)
+
+ESPTab:CreateToggle("Visible Only", function(v)
+	Settings.ESPVisibleOnly = v
+end)
+
+ESPTab:CreateSlider("Max Distance", 0, 2000, Settings.ESPMaxDistance, function(v)
+	Settings.ESPMaxDistance = v
+end)
+
+-- ESP Style Tab: Appearance customization
+ESPStyleTab:CreateSlider("Text Size", 10, 24, Settings.ESPTextSize, function(v)
+	Settings.ESPTextSize = v
+end)
+
+ESPStyleTab:CreateSlider("Box Thickness", 1, 5, Settings.ESPBoxThickness, function(v)
+	Settings.ESPBoxThickness = v
+end)
+
+ESPStyleTab:CreateSlider("Skeleton Thickness", 1, 5, Settings.ESPSkeletonThickness, function(v)
+	Settings.ESPSkeletonThickness = v
+end)
+
+ESPStyleTab:CreateSlider("Fill Opacity", 0, 100, math.floor(Settings.ESPFillOpacity * 100), function(v)
+	Settings.ESPFillOpacity = v / 100
+end)
+
+ESPStyleTab:CreateSlider("Outline Opacity", 0, 100, math.floor(Settings.ESPOutlineOpacity * 100), function(v)
+	Settings.ESPOutlineOpacity = v / 100
+end)
+
+-- Movement Tab
+MoveTab:CreateSlider("WalkSpeed", 0, 200, Settings.WalkSpeed, function(v)
+	Settings.WalkSpeed = v
+end)
+
+MoveTab:CreateSlider("JumpPower", 0, 300, Settings.JumpPower, function(v)
+	Settings.JumpPower = v
+end)
+
+MoveTab:CreateToggle("Infinite Jump", function(v)
+	Settings.InfJump = v
+end)
+
+MoveTab:CreateToggle("TP to Cursor (T)", function(v)
+	Settings.TPToCursor = v
+end)
+
+MoveTab:CreateToggle("Anti-FOV", function(v)
+	Settings.AntiFOV = v
+end)
+
+MoveTab:CreateSlider("Anti-FOV Distance", 4, 20, Settings.AntiFOVDistance, function(v)
+	Settings.AntiFOVDistance = v
+end)
+
+MoveTab:CreateSlider("Anti-FOV Max Distance", 0, 2000, Settings.AntiFOVMaxDistance, function(v)
+	Settings.AntiFOVMaxDistance = v
+end)
+
+MoveTab:CreateToggle("Autofarm", function(v)
+	Settings.Autofarm = v
+end)
+
+MoveTab:CreateSlider("Autofarm Speed", 20, 500, Settings.AutofarmSpeed, function(v)
+	Settings.AutofarmSpeed = v
+end)
+
+MoveTab:CreateSlider("Autofarm Max Distance", 0, 2000, Settings.AutofarmMaxDistance, function(v)
+	Settings.AutofarmMaxDistance = v
+end)
+
+--// Cleanup
+LocalPlayer.CharacterRemoving:Connect(function()
+	FOVCircle.Visible = false
+end)
+
+Window:Notify("Rivals", "Loaded successfully", 3)
