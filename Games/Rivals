@@ -2,7 +2,7 @@
 --// github.com/metrosiren
 
 local Prism = loadstring(game:HttpGet("https://raw.githubusercontent.com/metrosiren/Lua/refs/heads/main/Prism"))()
-local Window = Prism:CreateWindow("Rivals", "RR291, inf, true)
+local Window = Prism:CreateWindow("Rivals", "RR291", inf, true)
 
 --// Services
 local Players = game:GetService("Players")
