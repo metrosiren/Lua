@@ -1,10 +1,8 @@
 --// Rivals
---// github.com/metrosiren
 
 local Prism = loadstring(game:HttpGet("https://raw.githubusercontent.com/metrosiren/Lua/refs/heads/main/Prism"))()
-local Window = Prism:CreateWindow("Rivals", "RR291", inf, true)
+local Window = Prism:CreateWindow("Kepler - Rivals", "RR291", inf, true)
 
---// Services
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -12,7 +10,13 @@ local Workspace = game:GetService("Workspace")
 local Camera = Workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
---// Settings
+local targetPlayer = nil
+local ClickInterval = 0.10
+local isLeftMouseDown = false
+local isRightMouseDown = false
+local autoClickConnection = nil
+local silentAimSuspendUntil = 0
+
 local Settings = {
 	Aimbot = false,
 	AimSmoothness = 2,
@@ -26,6 +30,7 @@ local Settings = {
 	AimActive = false,
 	Triggerbot = false,
 	TriggerbotDelay = 50,
+	SilentAim = false,
 
 	ESP = true,
 	ESPVisibleOnly = false,
@@ -153,6 +158,14 @@ local function isInMatch()
 	return root.Position.Y > LOBBY_Y
 end
 
+local function isLobbyVisible()
+	local ok, visible = pcall(function()
+		return LocalPlayer.PlayerGui.MainGui.MainFrame.Lobby.Currency.Visible == true
+	end)
+	if not ok then return false end
+	return visible == true
+end
+
 --// Look at target using mousemoverel (shared by anti-fov & autofarm)
 local function lookAtTarget(targetPos)
 	local screenPos, onScreen = worldToScreen(targetPos)
@@ -221,6 +234,30 @@ local function getClosestPlayer()
 	return closest
 end
 
+local function getClosestPlayerToMouse()
+	local closest, closestDist = nil, math.huge
+	local mousePosition = UserInputService:GetMouseLocation()
+
+	for _, player in Players:GetPlayers() do
+		if player == LocalPlayer then continue end
+		local char = player.Character
+		if not char then continue end
+		local part = char:FindFirstChild("Head")
+		if not part then continue end
+
+		local screenPos, onScreen = worldToScreen(part.Position)
+		if not onScreen then continue end
+
+		local dist = (screenPos - mousePosition).Magnitude
+		if dist < closestDist then
+			closest = player
+			closestDist = dist
+		end
+	end
+
+	return closest
+end
+
 local function aimAt(target)
 	local char = getCharacter(target)
 	if not char then return end
@@ -241,6 +278,34 @@ local function aimAt(target)
 	end
 
 	mousemoverel(math.floor(move.X), math.floor(move.Y))
+end
+
+local function lockCameraToHead()
+	if targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("Head") then
+		local head = targetPlayer.Character.Head
+		local headPosition = Camera:WorldToViewportPoint(head.Position)
+		if headPosition.Z > 0 then
+			local cameraPosition = Camera.CFrame.Position
+			local direction = (head.Position - cameraPosition).Unit
+			Camera.CFrame = CFrame.new(cameraPosition, head.Position)
+		end
+	end
+end
+
+local function autoClick()
+	if autoClickConnection then
+		autoClickConnection:Disconnect()
+	end
+	autoClickConnection = RunService.Heartbeat:Connect(function()
+		if (isLeftMouseDown or isRightMouseDown) and Settings.SilentAim then
+			if not isLobbyVisible() then
+				mouse1click()
+			end
+		else
+			autoClickConnection:Disconnect()
+			autoClickConnection = nil
+		end
+	end)
 end
 
 --// ESP Functions
@@ -514,6 +579,42 @@ UserInputService.InputEnded:Connect(function(input)
 	end
 end)
 
+UserInputService.InputBegan:Connect(function(input, gpe)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 and not gpe then
+		if not Settings.SilentAim then return end
+		if not isLeftMouseDown then
+			isLeftMouseDown = true
+			autoClick()
+		end
+	elseif input.UserInputType == Enum.UserInputType.MouseButton2 and not gpe then
+		if not Settings.SilentAim then return end
+		if not isRightMouseDown then
+			isRightMouseDown = true
+			autoClick()
+		end
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input, gpe)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 and not gpe then
+		isLeftMouseDown = false
+	elseif input.UserInputType == Enum.UserInputType.MouseButton2 and not gpe then
+		isRightMouseDown = false
+	end
+end)
+
+RunService.Heartbeat:Connect(function()
+	if not Settings.SilentAim then return end
+	if tick() < silentAimSuspendUntil then return end
+	if not (isLeftMouseDown or isRightMouseDown) then return end
+	if not isLobbyVisible() then
+		targetPlayer = getClosestPlayerToMouse()
+		if targetPlayer then
+			lockCameraToHead()
+		end
+	end
+end)
+
 --// Triggerbot
 local lastTrigger = 0
 local function tryTriggerbot()
@@ -579,6 +680,7 @@ UserInputService.InputBegan:Connect(function(input, gpe)
 	if gpe then return end
 	if not Settings.TPToCursor then return end
 	if input.KeyCode ~= Settings.TPToCursorKey then return end
+	silentAimSuspendUntil = tick() + 0.35
 	local char = LocalPlayer.Character
 	if not char then return end
 	local root = char:FindFirstChild("HumanoidRootPart")
@@ -752,6 +854,8 @@ RunService.RenderStepped:Connect(function()
 		end
 	end
 
+	-- Silent Aim handled in dedicated heartbeat connection
+
 	-- Triggerbot
 	tryTriggerbot()
 
@@ -770,6 +874,19 @@ local MoveTab = Window:CreateTab("Movement")
 -- Aimbot Tab: Core → Config → Filters
 AimTab:CreateToggle("Aimbot", function(v)
 	Settings.Aimbot = v
+end)
+
+AimTab:CreateToggle("Silent Aim", function(v)
+	Settings.SilentAim = v
+	if not v then
+		isLeftMouseDown = false
+		isRightMouseDown = false
+		targetPlayer = nil
+		if autoClickConnection then
+			autoClickConnection:Disconnect()
+			autoClickConnection = nil
+		end
+	end
 end)
 
 AimTab:CreateDropdown("Aim Part", {"Head", "UpperTorso", "HumanoidRootPart"}, function(v)
