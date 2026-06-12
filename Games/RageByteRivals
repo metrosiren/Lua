@@ -4,13 +4,14 @@ local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
+local HttpService = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
 -- Configurations
 local TP_HEIGHT = 6
-local MAX_STUD_DISTANCE = 300
+local MAX_STUD_DISTANCE = 10000
 
 -- State
 local STATE = {
@@ -42,6 +43,8 @@ local STATE = {
     JumpPower = 50,
     JumpPowerEnabled = false,
     TPToCursor = false,
+    AntiCheatBypass = false,
+    UnlockSkins = false,
     
     ESP = false,
     ESPTeamCheck = false,
@@ -53,6 +56,42 @@ local STATE = {
     ESPDistance = false,
     ESPMaxDistance = 500
 }
+
+-----------------------------------
+-- CONFIG SAVE / LOAD
+-----------------------------------
+local CONFIG_FILE = "rivals_rage_config.json"
+local SAVEABLE_KEYS = {
+    "Master","Teleport","AutoClick","NoRecoil","InfJump","FastWeaps",
+    "SilentAim","Aimbot","AimSmoothness","AimHumanize","AimFOV",
+    "AimVisibleOnly","AimMaxDistance","AimMode","AimPart",
+    "Triggerbot","TriggerbotDelay",
+    "WalkSpeed","WalkSpeedEnabled","JumpPower","JumpPowerEnabled","TPToCursor",
+    "ESP","ESPTeamCheck","ESPBox","ESPTracer","ESPName","ESPSkeleton",
+    "ESPHealthBar","ESPDistance","ESPMaxDistance",
+    "AntiCheatBypass","UnlockSkins"
+}
+
+local function saveConfig()
+    if not writefile then return end
+    local t = {}
+    for _, k in ipairs(SAVEABLE_KEYS) do t[k] = STATE[k] end
+    pcall(writefile, CONFIG_FILE, HttpService:JSONEncode(t))
+end
+
+local function loadConfig()
+    if not (readfile and isfile) then return end
+    if not isfile(CONFIG_FILE) then return end
+    local ok, raw = pcall(readfile, CONFIG_FILE)
+    if not ok then return end
+    local ok2, parsed = pcall(function() return HttpService:JSONDecode(raw) end)
+    if not ok2 or type(parsed) ~= "table" then return end
+    for _, k in ipairs(SAVEABLE_KEYS) do
+        if parsed[k] ~= nil then STATE[k] = parsed[k] end
+    end
+end
+
+loadConfig()
 
 local isHoldingClick = false
 local targetPlayer = nil
@@ -158,6 +197,29 @@ local function getClosestPlayerAim()
     return closest
 end
 
+-- Silent aim variant: no FOV cap, no visibility check, no distance limit (true wallbang)
+local function getSilentAimTarget()
+    local closest, closestDist = nil, math.huge
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    for _, player in pairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if STATE.ESPTeamCheck and player.Team == LocalPlayer.Team then continue end
+        if not isAlive(player) then continue end
+        local char = getCharacter(player)
+        if not char then continue end
+        local part = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+        if not part then continue end
+        local screenPos, _, depth = worldToScreen(part.Position)
+        if depth <= 0 then continue end  -- behind camera
+        local dist = (screenPos - center).Magnitude
+        if dist < closestDist then
+            closest = player
+            closestDist = dist
+        end
+    end
+    return closest
+end
+
 local function aimAt(target)
     local char = getCharacter(target)
     if not char then return end
@@ -170,7 +232,11 @@ local function aimAt(target)
     local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
     local delta = screenPos - center
 
-    local smooth = math.clamp(STATE.AimSmoothness, 1, 20)
+    -- Remap slider 1-20 → divisor 0.05-2.0 (non-linear).
+    -- At 1: divisor ≈ 0.05 → move = delta*20 (very aggressive snap/overshoot).
+    -- At ~5: divisor ≈ 0.5  → still fast but stable.
+    -- At 20: divisor = 2.0  → smooth tracking.
+    local smooth = math.max(STATE.AimSmoothness * 0.1, 0.05)
     local move = delta / smooth
 
     if STATE.AimHumanize then
@@ -215,7 +281,36 @@ pcall(function()
     end
 end)
 
+-- Store originals so FastWeaps can be fully reversed when toggled off
+local OriginalItemData = {}
+if type(ItemLibrary) == "table" then
+    for name, data in pairs(ItemLibrary) do
+        if type(data) == "table" then
+            OriginalItemData[name] = {
+                ShootSpread       = data.ShootSpread,
+                ShootAccuracy     = data.ShootAccuracy,
+                ShootRecoil       = data.ShootRecoil,
+                AttackCooldown    = data.AttackCooldown,
+                SwingCooldown     = data.SwingCooldown,
+                MeleeCooldown     = data.MeleeCooldown,
+                Cooldown          = data.Cooldown,
+                RecoveryTime      = data.RecoveryTime,
+                ResetTime         = data.ResetTime,
+                ShootCooldown     = data.ShootCooldown,
+                ShootBurstCooldown = data.ShootBurstCooldown,
+            }
+        end
+    end
+end
+local origHumStats = { WalkSpeed = 16, JumpPower = 50 }
+local prevFastWeaps = STATE.FastWeaps
+local prevWalkSpeedEnabled = STATE.WalkSpeedEnabled
+local prevJumpPowerEnabled = STATE.JumpPowerEnabled
+
 local function hookHumanoid(hum)
+    -- capture game-original values before we ever modify them
+    origHumStats.WalkSpeed = hum.WalkSpeed
+    origHumStats.JumpPower = hum.JumpPower
     hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
         if STATE.WalkSpeedEnabled and STATE.Master and hum.WalkSpeed ~= STATE.WalkSpeed then
             hum.WalkSpeed = STATE.WalkSpeed
@@ -243,6 +338,37 @@ end
 RunService.Stepped:Connect(function()
     Camera = Workspace.CurrentCamera
     if not STATE.Master then return end
+
+    -- Detect FastWeaps toggle-off and restore original item values
+    if STATE.FastWeaps ~= prevFastWeaps then
+        prevFastWeaps = STATE.FastWeaps
+        if not STATE.FastWeaps and type(ItemLibrary) == "table" then
+            for name, data in pairs(ItemLibrary) do
+                local orig = OriginalItemData[name]
+                if orig then
+                    for k, v in pairs(orig) do data[k] = v end
+                end
+            end
+        end
+    end
+
+    -- Detect WalkSpeed toggle-off and restore original speed
+    if STATE.WalkSpeedEnabled ~= prevWalkSpeedEnabled then
+        prevWalkSpeedEnabled = STATE.WalkSpeedEnabled
+        if not STATE.WalkSpeedEnabled and LocalPlayer.Character then
+            local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+            if hum then hum.WalkSpeed = origHumStats.WalkSpeed end
+        end
+    end
+
+    -- Detect JumpPower toggle-off and restore original power
+    if STATE.JumpPowerEnabled ~= prevJumpPowerEnabled then
+        prevJumpPowerEnabled = STATE.JumpPowerEnabled
+        if not STATE.JumpPowerEnabled and LocalPlayer.Character then
+            local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+            if hum then hum.JumpPower = origHumStats.JumpPower end
+        end
+    end
 
     if STATE.FastWeaps and type(ItemLibrary) == "table" then
         for _, data in pairs(ItemLibrary) do
@@ -968,6 +1094,7 @@ local function addToggle(page, labelText, stateKey)
         TweenService:Create(boxStroke, TWEEN_INFO, {Color = STATE[stateKey] and UI_ACCENT or UI_STROKE}):Play()
         TweenService:Create(fillDot, TWEEN_INFO, {BackgroundTransparency = STATE[stateKey] and 0 or 1}):Play()
         TweenService:Create(lbl, TWEEN_INFO, {TextColor3 = STATE[stateKey] and UI_TEXT or UI_TEXT_MUTED}):Play()
+        saveConfig()
     end)
 end
 
@@ -1024,7 +1151,10 @@ local function addSlider(page, labelText, stateKey, min, max)
         end
     end)
     UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            if dragging then saveConfig() end
+            dragging = false
+        end
     end)
     UserInputService.InputChanged:Connect(function(input)
         if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
@@ -1097,6 +1227,12 @@ addSection(tMovement, "Teleport")
 addToggle(tMovement, "TP to Cursor [T]", "TPToCursor")
 addToggle(tMovement, "TP to Players", "Teleport")
 
+local tMisc = createTab("Misc")
+addSection(tMisc, "Security")
+addToggle(tMisc, "AC Bypass", "AntiCheatBypass")
+addSection(tMisc, "Cosmetics")
+addToggle(tMisc, "Unlock All Skins", "UnlockSkins")
+
 selectTab(1)
 
 -----------------------------------
@@ -1118,7 +1254,7 @@ customEnv.SilentAim.Shutdown = function(self)
 end
 
 customEnv.SilentAim.Connection1 = RunService.Heartbeat:Connect(function()
-    if STATE.SilentAim and STATE.Master then customEnv.SilentAim.Target = getClosestPlayerAim() end
+    if STATE.SilentAim and STATE.Master then customEnv.SilentAim.Target = getSilentAimTarget() end
 end)
 
 if type(GunModule) == "table" and GunModule.StartShooting then
@@ -1165,4 +1301,346 @@ if type(GunModule) == "table" and GunModule.StartShooting then
         end)
         return unpack(args)
     end
+end
+
+-----------------------------------
+-- ANTICHEAT BYPASS
+-----------------------------------
+do
+    local _acApplied = false
+    local _acDescConn = nil
+    local _prevACBypass = STATE.AntiCheatBypass
+
+    -- Install setmetatable hook once; intercepts only while STATE.AntiCheatBypass is on
+    pcall(function()
+        local _orig
+        _orig = hookfunction(getrenv().setmetatable, newcclosure(function(tbl, mt)
+            if STATE.AntiCheatBypass and mt and typeof(mt) == "table" and rawget(mt, "__mode") == "kv" then
+                local tr = debug.traceback()
+                if tr:find("MiscellaneousController") then
+                    return _orig({1, 2, 3}, {})
+                end
+            end
+            return _orig(tbl, mt)
+        end))
+    end)
+
+    RunService.Stepped:Connect(function()
+        -- One-shot: run bypass ops the first time the toggle is enabled
+        if STATE.AntiCheatBypass and not _acApplied then
+            _acApplied = true
+            task.spawn(function()
+                -- Disable scripts with AC-related names
+                pcall(function()
+                    local tags = { "anticheat", "ac", "detection", "ban", "kick", "security", "moderation" }
+                    local function proc(o)
+                        pcall(function()
+                            if not (o:IsA("LocalScript") or o:IsA("ModuleScript")) then return end
+                            local ok, nm = pcall(function() return o.Name:lower() end)
+                            if not ok then return end
+                            for _, t in ipairs(tags) do
+                                if nm:find(t) then pcall(function() o.Disabled = true end) break end
+                            end
+                        end)
+                    end
+                    for _, o in ipairs(game:GetDescendants()) do proc(o) end
+                    _acDescConn = game.DescendantAdded:Connect(proc)
+                end)
+                -- Decoy remote to absorb kick events
+                pcall(function()
+                    local ev = Instance.new("RemoteEvent")
+                    ev.Name = "ClientAlert"
+                    ev.Parent = LocalPlayer
+                end)
+                -- Patch ban/kick functions found in the GC
+                pcall(function()
+                    local rf  = game:GetService("ReplicatedFirst")
+                    local tgt = rf:WaitForChild("LocalScript3", 10)
+                    for _, fn in ipairs(getgc(false)) do
+                        if type(fn) ~= "function" then continue end
+                        local ok1, env = pcall(getfenv, fn)
+                        if not ok1 or type(env) ~= "table" then continue end
+                        local ok2, scr = pcall(function() return rawget(env, "script") end)
+                        if not ok2 or not scr or typeof(scr) ~= "Instance" then continue end
+                        local ok3, ss = pcall(tostring, scr)
+                        if not ok3 then continue end
+                        if not (scr == tgt or (type(ss) == "string" and ss:find("LoadingScreen"))) then continue end
+                        local ok4, consts = pcall(debug.getconstants, fn)
+                        if not ok4 or type(consts) ~= "table" then continue end
+                        for _, c in ipairs(consts) do
+                            if type(c) == "string" and (c:find("TakeTheL") or c:find("ban") or c:find("kick")) then
+                                pcall(hookfunction, fn, function() end)
+                                break
+                            end
+                        end
+                    end
+                end)
+            end)
+        end
+        -- Toggle-off: stop watching for new AC scripts
+        if STATE.AntiCheatBypass ~= _prevACBypass then
+            _prevACBypass = STATE.AntiCheatBypass
+            if not STATE.AntiCheatBypass and _acDescConn then
+                _acDescConn:Disconnect()
+                _acDescConn = nil
+            end
+        end
+    end)
+end
+
+-----------------------------------
+-- UNLOCK ALL SKINS / WRAPS / CHARMS
+-----------------------------------
+do
+    local _skinHooked = false
+
+    RunService.Stepped:Connect(function()
+        if not STATE.UnlockSkins or _skinHooked then return end
+        _skinHooked = true
+        task.spawn(function()
+            local ctrl = LocalPlayer.PlayerScripts.Controllers
+            local mods = ReplicatedStorage:WaitForChild("Modules", 10)
+            if not mods then return end
+
+            local enumLib, cosLib, datCtrl
+            pcall(function()
+                enumLib = require(mods:WaitForChild("EnumLibrary", 10))
+                if enumLib then pcall(function() enumLib:WaitForEnumBuilder() end) end
+            end)
+            pcall(function() cosLib  = require(mods:WaitForChild("CosmeticLibrary", 10)) end)
+            pcall(function() datCtrl = require(ctrl:WaitForChild("PlayerDataController", 10)) end)
+            if not cosLib or not datCtrl then return end
+
+            local eq, favs = {}, {}
+            local buildingWep = nil
+            local cosTypes = { "Skin", "Wrap", "Charm", "Dance", "Emote" }
+
+            local function isCosType(c)
+                if not c then return false end
+                for _, t in ipairs(cosTypes) do if c.Type == t then return true end end
+                return false
+            end
+
+            local function mkCosmetic(nm, ctype, opts)
+                local base = cosLib.Cosmetics[nm]
+                if not base then return nil end
+                local d = {}
+                for k, v in pairs(base) do d[k] = v end
+                d.Name = nm; d.Type = d.Type or ctype; d.Seed = d.Seed or math.random(1, 1000000)
+                if enumLib then
+                    local s, eid = pcall(function() return enumLib:ToEnum(nm) end)
+                    if s and eid then d.Enum = eid; d.ObjectID = d.ObjectID or eid end
+                end
+                if opts then
+                    if opts.inverted ~= nil then d.Inverted = opts.inverted end
+                    if opts.favoritesOnly ~= nil then d.OnlyUseFavorites = opts.favoritesOnly end
+                end
+                return d
+            end
+
+            -- Load previously saved unlock config
+            local cfgFile  = "rivals_unlocker_config.json"
+            local saveLock = false
+            pcall(function()
+                if not (isfile and readfile) or not isfile(cfgFile) then return end
+                local ok, raw = pcall(readfile, cfgFile)
+                if not ok or raw == "" then return end
+                local ok2, dec = pcall(function() return HttpService:JSONDecode(raw) end)
+                if not ok2 or not dec then return end
+                if dec.favorites then favs = dec.favorites end
+                if dec.equipped then
+                    for wn, cos in pairs(dec.equipped) do
+                        eq[wn] = {}
+                        for ct, sd in pairs(cos) do
+                            if sd and sd.Name and cosLib.Cosmetics[sd.Name] then
+                                local cl = mkCosmetic(sd.Name, ct, { inverted = sd.Inverted, favoritesOnly = sd.OnlyUseFavorites })
+                                if cl then eq[wn][ct] = cl end
+                            end
+                        end
+                        if not next(eq[wn]) then eq[wn] = nil end
+                    end
+                end
+            end)
+
+            local function saveCfg()
+                if not writefile or saveLock then return end
+                saveLock = true
+                task.spawn(function()
+                    task.wait(1)
+                    local out = {}
+                    for wn, cos in pairs(eq) do
+                        out[wn] = {}
+                        for ct, cd in pairs(cos) do
+                            if cd and cd.Name then
+                                out[wn][ct] = { Name = cd.Name, Inverted = cd.Inverted, OnlyUseFavorites = cd.OnlyUseFavorites }
+                            end
+                        end
+                    end
+                    local ok, enc = pcall(function() return HttpService:JSONEncode({ equipped = out, favorites = favs }) end)
+                    if ok then pcall(writefile, cfgFile, enc) end
+                    saveLock = false
+                end)
+            end
+
+            -- Ownership overrides; all respect STATE.UnlockSkins dynamically
+            local origOwns = cosLib.OwnsCosmetic
+            cosLib.OwnsCosmeticNormally = function(self, inv, nm)
+                local c = cosLib.Cosmetics[nm]
+                return (STATE.UnlockSkins and c ~= nil and c.Type == "Skin") or false
+            end
+            cosLib.OwnsCosmeticUniversally = function(self, inv, nm)
+                local c = cosLib.Cosmetics[nm]
+                return (STATE.UnlockSkins and c ~= nil and c.Type == "Skin") or false
+            end
+            cosLib.OwnsCosmeticForWeapon = function(self, inv, nm)
+                local c = cosLib.Cosmetics[nm]
+                return (STATE.UnlockSkins and c ~= nil and c.Type == "Skin") or false
+            end
+            cosLib.OwnsCosmetic = function(self, inv, nm, wep)
+                if not STATE.UnlockSkins then return origOwns(self, inv, nm, wep) end
+                if nm:find("MISSING_") or nm == "Bubble Gun" then return origOwns(self, inv, nm, wep) end
+                local c = cosLib.Cosmetics[nm]
+                if c and isCosType(c) then return true end
+                return origOwns(self, inv, nm, wep)
+            end
+
+            local origGet = datCtrl.Get
+            datCtrl.Get = function(self, key)
+                local val = origGet(self, key)
+                if not STATE.UnlockSkins then return val end
+                if key == "CosmeticInventory" then
+                    local prx = {}
+                    if val then
+                        for k, v in pairs(val) do
+                            local c = cosLib.Cosmetics[k]
+                            if c and isCosType(c) then prx[k] = v end
+                        end
+                    end
+                    return setmetatable(prx, {
+                        __index = function(_, k)
+                            local c = cosLib.Cosmetics[k]
+                            if c and isCosType(c) then return true end
+                            return nil
+                        end
+                    })
+                end
+                if key == "FavoritedCosmetics" then
+                    local res = val and table.clone(val) or {}
+                    for wep2, fv in pairs(favs) do
+                        res[wep2] = res[wep2] or {}
+                        for nm2, isFav in pairs(fv) do
+                            local c = cosLib.Cosmetics[nm2]
+                            if c and isCosType(c) then res[wep2][nm2] = isFav end
+                        end
+                    end
+                    return res
+                end
+                return val
+            end
+
+            local origGetWep = datCtrl.GetWeaponData
+            datCtrl.GetWeaponData = function(self, wn)
+                local d = origGetWep(self, wn)
+                if not d or not STATE.UnlockSkins then return d end
+                local m = {}
+                for k, v in pairs(d) do m[k] = v end
+                m.Name = wn
+                if eq[wn] then for ct, cd in pairs(eq[wn]) do m[ct] = cd end end
+                return m
+            end
+
+            -- Intercept EquipCosmetic and FavoriteCosmetic remote calls
+            if hookmetamethod then
+                local remotes  = ReplicatedStorage:FindFirstChild("Remotes")
+                local dataRem  = remotes and remotes:FindFirstChild("Data")
+                local equipRem = dataRem and dataRem:FindFirstChild("EquipCosmetic")
+                local favRem   = dataRem and dataRem:FindFirstChild("FavoriteCosmetic")
+                if equipRem then
+                    local onc
+                    onc = hookmetamethod(game, "__namecall", function(self, ...)
+                        if getnamecallmethod() ~= "FireServer" then return onc(self, ...) end
+                        if not STATE.UnlockSkins then return onc(self, ...) end
+                        local a = { ... }
+                        if self == equipRem then
+                            local wn, ct, cn, opts = a[1], a[2], a[3], a[4] or {}
+                            if cn and cn ~= "None" and cn ~= "" then
+                                local inv = datCtrl:Get("CosmeticInventory")
+                                if inv and rawget(inv, cn) then return onc(self, ...) end
+                            end
+                            eq[wn] = eq[wn] or {}
+                            if not cn or cn == "None" or cn == "" then
+                                eq[wn][ct] = nil
+                                if not next(eq[wn]) then eq[wn] = nil end
+                            else
+                                local cl = mkCosmetic(cn, ct, { inverted = opts.IsInverted, favoritesOnly = opts.OnlyUseFavorites })
+                                if cl then eq[wn][ct] = cl end
+                            end
+                            task.defer(function() pcall(function() datCtrl.CurrentData:Replicate("WeaponInventory") end) end)
+                            saveCfg()
+                            return
+                        end
+                        if self == favRem then
+                            local cos = cosLib.Cosmetics[a[2]]
+                            if cos then
+                                favs[a[1]] = favs[a[1]] or {}
+                                favs[a[1]][a[2]] = a[3] or nil
+                                task.spawn(function() pcall(function() datCtrl.CurrentData:Replicate("FavoritedCosmetics") end) end)
+                                saveCfg()
+                            end
+                            return
+                        end
+                        return onc(self, ...)
+                    end)
+                end
+            end
+
+            -- Inject equipped cosmetics into the weapon viewmodel on creation
+            local cliItem
+            pcall(function() cliItem = require(LocalPlayer.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.ClientItem) end)
+            if cliItem and cliItem._CreateViewModel then
+                local origCVM = cliItem._CreateViewModel
+                cliItem._CreateViewModel = function(self, vmRef)
+                    local wn = self.Name
+                    local wp = self.ClientFighter and self.ClientFighter.Player
+                    buildingWep = (wp == LocalPlayer) and wn or nil
+                    if wp == LocalPlayer and STATE.UnlockSkins and eq[wn] then
+                        local dk = self:ToEnum("Data")
+                        if vmRef[dk] then
+                            if eq[wn].Skin  then vmRef[dk][self:ToEnum("Skin")]  = eq[wn].Skin; vmRef[dk][self:ToEnum("Name")] = eq[wn].Skin.Name end
+                            if eq[wn].Charm then vmRef[dk][self:ToEnum("Charm")] = eq[wn].Charm end
+                            if eq[wn].Wrap  then vmRef[dk][self:ToEnum("Wrap")]  = eq[wn].Wrap  end
+                        elseif vmRef.Data then
+                            if eq[wn].Skin  then vmRef.Data.Skin  = eq[wn].Skin; vmRef.Data.Name = eq[wn].Skin.Name end
+                            if eq[wn].Charm then vmRef.Data.Charm = eq[wn].Charm end
+                            if eq[wn].Wrap  then vmRef.Data.Wrap  = eq[wn].Wrap  end
+                        end
+                    end
+                    local r = origCVM(self, vmRef)
+                    buildingWep = nil
+                    return r
+                end
+            end
+
+            -- Patch ClientViewModel.new to pass cosmetic data during replication
+            local vmMod = LocalPlayer.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.ClientItem:FindFirstChild("ClientViewModel")
+            if vmMod then
+                local CVM     = require(vmMod)
+                local origNew = CVM.new
+                CVM.new = function(repData, cliItm)
+                    local wp = cliItm.ClientFighter and cliItm.ClientFighter.Player
+                    local wn = buildingWep or cliItm.Name
+                    if wp == LocalPlayer and STATE.UnlockSkins and eq[wn] then
+                        local RC = require(ReplicatedStorage.Modules.ReplicatedClass)
+                        local dk = RC:ToEnum("Data")
+                        repData[dk] = repData[dk] or {}
+                        local cos = eq[wn]
+                        if cos.Skin  then repData[dk][RC:ToEnum("Skin")]  = cos.Skin  end
+                        if cos.Charm then repData[dk][RC:ToEnum("Charm")] = cos.Charm end
+                        if cos.Wrap  then repData[dk][RC:ToEnum("Wrap")]  = cos.Wrap  end
+                    end
+                    return origNew(repData, cliItm)
+                end
+            end
+        end)
+    end)
 end
