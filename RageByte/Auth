@@ -1,4 +1,4 @@
-local github_url = "https://raw.githubusercontent.com/metrosiren/Lua/refs/heads/main/RageByte/Banned"
+local github_url = "https://raw.githubusercontent.com/metrosiren/Lua/refs/heads/main/RageByte/Blacklisted"
 local webhook_allowed = "https://discord.com/api/webhooks/1515207202137309285/UpSNncXNbMCfeYatvszDpR0gFaoS9hV7Y9RarpwSHueJXL_7ZX1d6mm8gWV9qqciuZOG"
 local webhook_banned = "https://discord.com/api/webhooks/1515207302263734321/4Df_5gy6KW300HFzMZSO67dzLWVedSQ6HbiRQcniLu4C5t6eUAF2Ymf4s-PzxBAIzvYU"
 
