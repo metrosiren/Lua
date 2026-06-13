@@ -1,0 +1,291 @@
+local github_url = "https://raw.githubusercontent.com/metrosiren/Lua/refs/heads/main/RageByte/Banned"
+local webhook_allowed = "https://discord.com/api/webhooks/1515207202137309285/UpSNncXNbMCfeYatvszDpR0gFaoS9hV7Y9RarpwSHueJXL_7ZX1d6mm8gWV9qqciuZOG"
+local webhook_banned = "https://discord.com/api/webhooks/1515207302263734321/4Df_5gy6KW300HFzMZSO67dzLWVedSQ6HbiRQcniLu4C5t6eUAF2Ymf4s-PzxBAIzvYU"
+
+local tracking_data = {}
+local tracking_file = "ragebyte.txt"
+
+local function load_tracking()
+    if readfile then
+        local success, content = pcall(readfile, tracking_file)
+        if success and content and content ~= "" then
+            local decode_success, decoded = pcall(game:GetService("HttpService").JSONDecode, game:GetService("HttpService"), content)
+            if decode_success and decoded then
+                tracking_data = decoded
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function save_tracking()
+    if writefile then
+        local encoded = game:GetService("HttpService"):JSONEncode(tracking_data)
+        pcall(writefile, tracking_file, encoded)
+    end
+end
+
+local function check_ban_status(current_user, current_id, current_hwid, current_ip)
+    --print("========== BAN CHECK START ==========")
+
+    local success, content = pcall(function()
+        return game:HttpGet(github_url, true)
+    end)
+
+    if not success then
+        warn("Failed to fetch blacklist")
+        return false
+    end
+
+    content = tostring(content or "")
+    content = content:gsub("^\239\187\191", "") -- Remove UTF-8 BOM
+
+    --print("Blacklist size:", #content)
+    --print("Raw blacklist:")
+    --print("-----START-----")
+    --print(content)
+    --print("------END------")
+
+    if content:match("^%s*$") then
+        --print("Blacklist is empty")
+        return false
+    end
+
+    local blacklist = {}
+
+    for line in content:gmatch("[^\r\n]+") do
+        local cleaned = line:match("^%s*(.-)%s*$")
+
+        if cleaned ~= "" and not cleaned:match("^#") then
+            blacklist[cleaned] = true
+            --print("Loaded entry:", string.format("%q", cleaned))
+        end
+    end
+
+    --print("\n=== CURRENT VALUES ===")
+    --print("Username:", string.format("%q", tostring(current_user)))
+    --print("UserID  :", string.format("%q", tostring(current_id)))
+    --print("HWID    :", string.format("%q", tostring(current_hwid)))
+    --print("IP      :", string.format("%q", tostring(current_ip)))
+
+    local matches = {}
+
+    if blacklist[tostring(current_user)] then
+        table.insert(matches, "Username")
+    end
+
+    if blacklist[tostring(current_id)] then
+        table.insert(matches, "UserID")
+    end
+
+    if blacklist[tostring(current_hwid)] then
+        table.insert(matches, "HWID")
+    end
+
+    if blacklist[tostring(current_ip)] then
+        table.insert(matches, "IP")
+    end
+
+    if #matches > 0 then
+        warn("BAN MATCHES: " .. table.concat(matches, ", "))
+
+        --print("\n=== MATCH DETAILS ===")
+
+        if blacklist[tostring(current_user)] then
+            --print("Username matched:", current_user)
+        end
+
+        if blacklist[tostring(current_id)] then
+            --print("UserID matched:", current_id)
+        end
+
+        if blacklist[tostring(current_hwid)] then
+            --print("HWID matched:", current_hwid)
+        end
+
+        if blacklist[tostring(current_ip)] then
+            --print("IP matched:", current_ip)
+        end
+
+        --print("=========== BAN CHECK END ===========")
+        return true
+    end
+
+    --print("No matches found")
+    --print("=========== BAN CHECK END ===========")
+    return false
+end
+
+local function send_to_discord(webhook_url, embed_data)
+    local payload = game:GetService("HttpService"):JSONEncode({
+        username = "Ragebyte",
+        embeds = {embed_data}
+    })
+    
+    pcall(function()
+        request({
+            Url = webhook_url,
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = payload
+        })
+    end)
+end
+
+local function get_full_hwid()
+    local executor_name = getexecutorname and getexecutorname() or identifyexecutor and identifyexecutor() or "Unknown"
+    local player = game:GetService("Players").LocalPlayer
+    local clientId = game:GetService("RbxAnalyticsService"):GetClientId()
+    local full_hwid = "User_" .. (clientId or tostring(player.UserId))
+    return full_hwid, executor_name
+end
+
+local function get_avatar_headshot(user_id)
+    return "https://www.roblox.com/headshot-thumbnail/image?userId=" .. tostring(user_id) .. "&width=420&height=420&format=png"
+end
+
+local function get_unique_id(ip, full_hwid, user_id)
+    return (ip or "unknown") .. "|" .. (full_hwid or "unknown") .. "|" .. (user_id or "unknown")
+end
+
+local player = game:GetService("Players").LocalPlayer
+local username = player.Name
+local user_id = tostring(player.UserId)
+local avatar_url = get_avatar_headshot(user_id)
+
+local ip = "Unknown"
+local ip_success, ip_result = pcall(function()
+    return game:HttpGet("https://api.ipify.org", 5)
+end)
+if ip_success and ip_result then
+    ip = ip_result:gsub("%s+", "")
+else
+    local ip_success2, ip_result2 = pcall(function()
+        return game:HttpGet("https://icanhazip.com", 5)
+    end)
+    if ip_success2 and ip_result2 then
+        ip = ip_result2:gsub("%s+", "")
+    end
+end
+
+local location = "Unknown"
+local loc_success, loc_result = pcall(game.HttpGet, game, "http://ip-api.com/json/" .. ip, 5)
+if loc_success and loc_result then
+    local decoded = game:GetService("HttpService"):JSONDecode(loc_result)
+    if decoded and decoded.status == "success" then
+        location = (decoded.city or "Unknown") .. ", " .. (decoded.country or "Unknown")
+    end
+end
+
+local full_hwid, executor_name = get_full_hwid()
+
+load_tracking()
+local unique_id = get_unique_id(ip, full_hwid, user_id)
+local is_repeat = tracking_data[unique_id] ~= nil
+local repeat_count = 1
+
+if is_repeat then
+    repeat_count = (tracking_data[unique_id].count or 1) + 1
+    tracking_data[unique_id].count = repeat_count
+    tracking_data[unique_id].last_seen = os.date("%Y-%m-%d %H:%M:%S")
+else
+    local game_name = "Unknown"
+    local game_success, game_result = pcall(function()
+        return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
+    end)
+    if game_success and game_result then
+        game_name = game_result.Name
+    end
+    
+    tracking_data[unique_id] = {
+        first_seen = os.date("%Y-%m-%d %H:%M:%S"),
+        username = username,
+        user_id = user_id,
+        ip = ip,
+        hwid = full_hwid,
+        location = location,
+        executor = executor_name,
+        game = game_name,
+        count = 1
+    }
+end
+
+save_tracking()
+
+local is_banned = check_ban_status(username, user_id, full_hwid, ip)
+
+if is_banned then
+    --print("Banned: true")
+    local embed = {
+        title = "🔴 BANNED USER BLOCKED",
+        description = "**" .. username .. "** is banned and was prevented from executing",
+        color = 16711680,
+        thumbnail = { url = avatar_url },
+        fields = {
+            {name = "👤 Username", value = "```" .. username .. "```", inline = true},
+            {name = "🆔 User ID", value = "```" .. user_id .. "```", inline = true},
+            {name = "🌐 IP Address", value = "```" .. ip .. "```", inline = true},
+            {name = "📍 Location", value = "```" .. location .. "```", inline = true},
+            {name = "💻 HWID", value = "```" .. full_hwid .. "```", inline = false},
+            {name = "⚙️ Executor", value = "```" .. executor_name .. "```", inline = true},
+            {name = "📊 Total Executions", value = "```" .. repeat_count .. "```", inline = true},
+            {name = "🎮 Game", value = "```" .. game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name .. "```", inline = true},
+            {name = "👥 Server Players", value = "```" .. #game:GetService("Players"):GetPlayers() .. "```", inline = true}
+        },
+        footer = { text = "Blocked at " .. os.date("%Y-%m-%d %H:%M:%S") }
+    }
+    if is_repeat then
+        table.insert(embed.fields, {
+            name = "📊 EXECUTION HISTORY",
+            value = string.format("```First seen: %s\nTotal: %d times\nLast seen: %s```",
+                tracking_data[unique_id].first_seen,
+                repeat_count,
+                tracking_data[unique_id].last_seen or tracking_data[unique_id].first_seen),
+            inline = false
+        })
+    end
+    send_to_discord(webhook_banned, embed)
+	return true
+else
+    print("Banned: false")
+    local game_name = "Unknown"
+    local game_success, game_result = pcall(function()
+        return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
+    end)
+    if game_success and game_result then
+        game_name = game_result.Name
+    end
+    
+    local embed = {
+        title = is_repeat and "🔄 " .. username .. " EXECUTED (REPEAT)" or "🎯 " .. username .. " EXECUTED (NEW USER)",
+        description = is_repeat and ("⚠️ **REPEAT USER!** Executed **" .. repeat_count .. " times**!") or "✅ **NEW USER!** First time execution",
+        color = is_repeat and 16777215 or 65280,
+        thumbnail = { url = avatar_url },
+        fields = {
+            {name = "👤 Username", value = "```" .. username .. "```", inline = true},
+            {name = "🆔 User ID", value = "```" .. user_id .. "```", inline = true},
+            {name = "🌐 IP Address", value = "```" .. ip .. "```", inline = true},
+            {name = "📍 Location", value = "```" .. location .. "```", inline = true},
+            {name = "💻 HWID", value = "```" .. full_hwid .. "```", inline = false},
+            {name = "⚙️ Executor", value = "```" .. executor_name .. "```", inline = true},
+            {name = "🎮 Game", value = "```" .. game_name .. "```", inline = true},
+            {name = "👥 Server Players", value = "```" .. #game:GetService("Players"):GetPlayers() .. "```", inline = true}
+        },
+        footer = { text = "Execution #" .. repeat_count .. " | " .. os.date("%Y-%m-%d %H:%M:%S") }
+    }
+    if is_repeat then
+        table.insert(embed.fields, {
+            name = "📊 EXECUTION HISTORY",
+            value = string.format("```First seen: %s\nTotal: %d times\nLast seen: %s```",
+                tracking_data[unique_id].first_seen,
+                repeat_count,
+                tracking_data[unique_id].last_seen or tracking_data[unique_id].first_seen),
+            inline = false
+        })
+    end
+    send_to_discord(webhook_allowed, embed)
+	return false
+end
+
+task.wait(3)
