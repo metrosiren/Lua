@@ -9,6 +9,16 @@ local HttpService = game:GetService("HttpService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
+-----------------------------------
+-- DEBUG LOGGING (temporary)
+-----------------------------------
+local _DBG = false
+local function dbg(tag, msg)
+    if not _DBG then return end
+    print(string.format("[RR|%.2f|%s] %s", tick(), tag, tostring(msg)))
+end
+dbg("INIT", "Script started")
+
 -- Configurations
 local TP_HEIGHT = 6
 local MAX_STUD_DISTANCE = 10000
@@ -23,6 +33,7 @@ local STATE = {
     FastWeaps = false,
     
     SilentAim = false,
+    SilentAimMode = "Regular",
     
     Aimbot = false,
     AimActive = false,
@@ -47,16 +58,42 @@ local STATE = {
     AntiCheatBypass = false,
     UnlockSkins = false,
     
+    CameraFOVScale = 1,
+    CameraFOVEnabled = false,
+
+    ChamsESP = false,
+    ChamsR = 255, ChamsG = 50, ChamsB = 50,
+
+    BulletTracers = false,
+    TracerR = 255, TracerG = 165, TracerB = 0,
+
+    ImpactMarkers = false,
+    ImpactR = 255, ImpactG = 255, ImpactB = 255,
+
+    AimTrajectory = false,
+    AimTrajR = 100, AimTrajG = 200, AimTrajB = 255,
+
+    SpinCrosshair = false,
+    TargetLine = false,
+    Noclip = false,
+    Fly = false,
+    MapVisuals = false,
+    MapVisualsPreset = "Arctic Night",
+
     ESP = false,
-    ESPTeamCheck = false,
     ESPBox = true,
+    ESPBoxFill = false,
     ESPTracer = false,
     ESPName = true,
     ESPSkeleton = false,
     ESPHealthBar = false,
     ESPDistance = false,
-    ESPMaxDistance = 500
+    ESPMaxDistance = 500,
+    ESPColorR = 240, ESPColorG = 240, ESPColorB = 240,
+    TeamCheck = false,
+    RainbowVisuals = false
 }
+dbg("INIT", "STATE initialized")
 
 -----------------------------------
 -- CONFIG SAVE / LOAD
@@ -64,21 +101,42 @@ local STATE = {
 local CONFIG_FILE = "rivals_rage_config.json"
 local SAVEABLE_KEYS = {
     "Master","Teleport","AutoClick","NoRecoil","InfJump","FastWeaps",
-    "SilentAim","Aimbot","AimSmoothness","AimHumanize","AimFOV",
+    "SilentAim","SilentAimMode","Aimbot","AimSmoothness","AimHumanize","AimFOV",
     "AimVisibleOnly","AimMaxDistance","AimMode","AimPart","AimKeyName",
     "Triggerbot","TriggerbotDelay",
     "WalkSpeed","WalkSpeedEnabled","JumpPower","JumpPowerEnabled","TPToCursor",
-    "ESP","ESPTeamCheck","ESPBox","ESPTracer","ESPName","ESPSkeleton",
+    "ESP","ESPBox","ESPBoxFill","ESPTracer","ESPName","ESPSkeleton",
     "ESPHealthBar","ESPDistance","ESPMaxDistance",
-    "AntiCheatBypass","UnlockSkins"
+    "AntiCheatBypass","UnlockSkins","TeamCheck",
+    "CameraFOVScale","CameraFOVEnabled",
+    "ChamsESP","ChamsR","ChamsG","ChamsB",
+    "BulletTracers","TracerR","TracerG","TracerB",
+    "ImpactMarkers","ImpactR","ImpactG","ImpactB",
+    "AimTrajectory","AimTrajR","AimTrajG","AimTrajB",
+    "SpinCrosshair",
+    "TargetLine",
+    "Noclip",
+    "Fly",
+    "MapVisuals","MapVisualsPreset",
+    "ESPColorR","ESPColorG","ESPColorB",
+    "RainbowVisuals"
 }
 
+local _saveDirty = false
 local function saveConfig()
-    if not writefile then return end
-    local t = {}
-    for _, k in ipairs(SAVEABLE_KEYS) do t[k] = STATE[k] end
-    pcall(writefile, CONFIG_FILE, HttpService:JSONEncode(t))
+    _saveDirty = true
 end
+
+task.spawn(function()
+    while task.wait(1) do
+        if _saveDirty and writefile then
+            _saveDirty = false
+            local t = {}
+            for _, k in ipairs(SAVEABLE_KEYS) do t[k] = STATE[k] end
+            pcall(writefile, CONFIG_FILE, HttpService:JSONEncode(t))
+        end
+    end
+end)
 
 local function loadConfig()
     if not (readfile and isfile) then return end
@@ -103,7 +161,9 @@ local AIM_KEYBIND_MAP = {
     -- Mobile: nil (typeof nil ~= "EnumItem" so InputBegan/Ended guards pass through)
 }
 
+dbg("CFG", "loading saved config from disk")
 loadConfig()
+dbg("CFG", "config loaded - SilentAim=" .. tostring(STATE.SilentAim) .. " Fly=" .. tostring(STATE.Fly) .. " UnlockSkins=" .. tostring(STATE.UnlockSkins) .. " ACBypass=" .. tostring(STATE.AntiCheatBypass))
 -- Reconstruct the Enum from the saved name (Enum values can't round-trip through JSON)
 STATE.AimKey = AIM_KEYBIND_MAP[STATE.AimKeyName]
 
@@ -170,6 +230,13 @@ local function getDistance(player)
 end
 
 -----------------------------------
+-- RAINBOW HELPER
+-----------------------------------
+local function getRainbow(offsetFrac)
+    return Color3.fromHSV((tick() * 0.15 + (offsetFrac or 0)) % 1, 1, 1)
+end
+
+-----------------------------------
 -- FOV & AIMBOT & TRIGGERBOT
 -----------------------------------
 
@@ -183,13 +250,21 @@ if FOVCircle then
     FOVCircle.Visible = false
 end
 
+local TargetLineDrawing = Drawing and Drawing.new("Line") or nil
+if TargetLineDrawing then
+    TargetLineDrawing.Thickness = 2
+    TargetLineDrawing.Color = Color3.fromRGB(255, 50, 50)
+    TargetLineDrawing.Transparency = 1
+    TargetLineDrawing.Visible = false
+end
+
 local function getClosestPlayerAim()
     local closest, closestDist = nil, STATE.AimFOV
     local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
 
     for _, player in pairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
-        if STATE.ESPTeamCheck and player.Team ~= nil and LocalPlayer.Team ~= nil and player.Team == LocalPlayer.Team then continue end
+        if STATE.TeamCheck and player.Team ~= nil and LocalPlayer.Team ~= nil and player.Team == LocalPlayer.Team then continue end
         if not isAlive(player) then continue end
         
         local char = getCharacter(player)
@@ -217,7 +292,7 @@ local function getSilentAimTarget()
     local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
     for _, player in pairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
-        if STATE.ESPTeamCheck and player.Team ~= nil and LocalPlayer.Team ~= nil and player.Team == LocalPlayer.Team then continue end
+        if STATE.TeamCheck and player.Team ~= nil and LocalPlayer.Team ~= nil and player.Team == LocalPlayer.Team then continue end
         if not isAlive(player) then continue end
         local char = getCharacter(player)
         if not char then continue end
@@ -288,34 +363,38 @@ end
 -- MODIFIERS
 -----------------------------------
 
-local ItemLibrary
-pcall(function()
-    if game.GameId == 6035872082 then
-        ItemLibrary = require(ReplicatedStorage.Modules.ItemLibrary).Items
+dbg("MOD", "deferring ItemLibrary require (async)")
+local ItemLibrary = nil
+local OriginalItemData = {}
+task.defer(function()
+    pcall(function()
+        if game.GameId == 6035872082 then
+            dbg("MOD", "requiring ItemLibrary")
+            ItemLibrary = require(ReplicatedStorage.Modules.ItemLibrary).Items
+            dbg("MOD", "ItemLibrary done, type=" .. type(ItemLibrary))
+        end
+    end)
+    if type(ItemLibrary) == "table" then
+        for name, data in pairs(ItemLibrary) do
+            if type(data) == "table" then
+                OriginalItemData[name] = {
+                    ShootSpread       = data.ShootSpread,
+                    ShootAccuracy     = data.ShootAccuracy,
+                    ShootRecoil       = data.ShootRecoil,
+                    AttackCooldown    = data.AttackCooldown,
+                    SwingCooldown     = data.SwingCooldown,
+                    MeleeCooldown     = data.MeleeCooldown,
+                    Cooldown          = data.Cooldown,
+                    RecoveryTime      = data.RecoveryTime,
+                    ResetTime         = data.ResetTime,
+                    ShootCooldown     = data.ShootCooldown,
+                    ShootBurstCooldown = data.ShootBurstCooldown,
+                }
+            end
+        end
+        dbg("MOD", "OriginalItemData populated")
     end
 end)
-
--- Store originals so FastWeaps can be fully reversed when toggled off
-local OriginalItemData = {}
-if type(ItemLibrary) == "table" then
-    for name, data in pairs(ItemLibrary) do
-        if type(data) == "table" then
-            OriginalItemData[name] = {
-                ShootSpread       = data.ShootSpread,
-                ShootAccuracy     = data.ShootAccuracy,
-                ShootRecoil       = data.ShootRecoil,
-                AttackCooldown    = data.AttackCooldown,
-                SwingCooldown     = data.SwingCooldown,
-                MeleeCooldown     = data.MeleeCooldown,
-                Cooldown          = data.Cooldown,
-                RecoveryTime      = data.RecoveryTime,
-                ResetTime         = data.ResetTime,
-                ShootCooldown     = data.ShootCooldown,
-                ShootBurstCooldown = data.ShootBurstCooldown,
-            }
-        end
-    end
-end
 local origHumStats = { WalkSpeed = 16, JumpPower = 50 }
 local prevFastWeaps = STATE.FastWeaps
 local prevWalkSpeedEnabled = STATE.WalkSpeedEnabled
@@ -468,6 +547,7 @@ RunService.RenderStepped:Connect(function()
     if FOVCircle then
         FOVCircle.Radius = STATE.AimFOV
         FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+        FOVCircle.Color = STATE.RainbowVisuals and getRainbow(0.8) or Color3.fromRGB(200, 200, 200)
         FOVCircle.Visible = (STATE.Aimbot and STATE.Master)
     end
 
@@ -477,6 +557,47 @@ RunService.RenderStepped:Connect(function()
     end
 
     if STATE.Master then tryTriggerbot() end
+
+    if STATE.CameraFOVEnabled and Camera then
+        if Camera.CameraType ~= Enum.CameraType.Scriptable then
+            local cc = Camera.CFrame
+            Camera.CFrame = CFrame.fromMatrix(
+                cc.Position,
+                cc.RightVector  * STATE.CameraFOVScale,
+                cc.UpVector     * STATE.CameraFOVScale,
+                -cc.LookVector
+            )
+        end
+    end
+
+    if TargetLineDrawing then
+        if STATE.TargetLine and STATE.Master then
+            local lineTarget = nil
+            if STATE.SilentAim then lineTarget = getSilentAimTarget() end
+            if not lineTarget and STATE.Aimbot then lineTarget = getClosestPlayerAim() end
+            if lineTarget then
+                local char = getCharacter(lineTarget)
+                local part = char and (char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart"))
+                if part then
+                    local screenPos, onScreen, depth = worldToScreen(part.Position)
+                    if onScreen and depth > 0 then
+                        TargetLineDrawing.From  = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+                        TargetLineDrawing.To    = screenPos
+                        TargetLineDrawing.Color = STATE.RainbowVisuals and getRainbow(0.25) or Color3.fromRGB(255, 50, 50)
+                        TargetLineDrawing.Visible = true
+                    else
+                        TargetLineDrawing.Visible = false
+                    end
+                else
+                    TargetLineDrawing.Visible = false
+                end
+            else
+                TargetLineDrawing.Visible = false
+            end
+        else
+            TargetLineDrawing.Visible = false
+        end
+    end
 end)
 
 local function updateQueue()
@@ -558,6 +679,13 @@ local function setupESP(player)
     if not Drawing then return end
     if player == LocalPlayer then return end
 
+    local BoxFill = Drawing.new("Square")
+    BoxFill.Color = Color3.fromRGB(240, 240, 240)
+    BoxFill.Thickness = 0
+    BoxFill.Filled = true
+    BoxFill.Transparency = 0.7
+    BoxFill.Visible = false
+
     local Box = Drawing.new("Square")
     Box.Color = Color3.fromRGB(240, 240, 240)
     Box.Thickness = 1
@@ -592,14 +720,14 @@ local function setupESP(player)
         SkeletonLines[i] = createLine()
     end
 
-    ESP_OBJECTS[player] = { Box = Box, Tracer = Tracer, Name = Name, DistText = DistText, HealthBarBG = HealthBarBG, HealthBarFG = HealthBarFG, SkeletonLines = SkeletonLines }
+    ESP_OBJECTS[player] = { Box = Box, BoxFill = BoxFill, Tracer = Tracer, Name = Name, DistText = DistText, HealthBarBG = HealthBarBG, HealthBarFG = HealthBarFG, SkeletonLines = SkeletonLines }
 
     local function espLoop()
         local obj = ESP_OBJECTS[player]
         if not obj then return end
         
         local isAlv = player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0
-        local isEnemy = not STATE.ESPTeamCheck or player.Team == nil or LocalPlayer.Team == nil or player.Team ~= LocalPlayer.Team
+        local isEnemy = not STATE.TeamCheck or player.Team == nil or LocalPlayer.Team == nil or player.Team ~= LocalPlayer.Team
         local isActive = STATE.ESP and STATE.Master and isEnemy
 
         if isAlv and isActive then
@@ -611,6 +739,7 @@ local function setupESP(player)
             local dist = getDistance(player)
             
             if onScreen and depth > 0 and dist <= STATE.ESPMaxDistance then
+                local espClr = STATE.RainbowVisuals and getRainbow(0) or Color3.fromRGB(STATE.ESPColorR, STATE.ESPColorG, STATE.ESPColorB)
                 local headScreen = head and worldToScreen(head.Position + Vector3.new(0, 1, 0)) or worldToScreen(hrp.Position + Vector3.new(0, 3, 0))
                 local footScreen = worldToScreen(hrp.Position - Vector3.new(0, 3.5, 0))
                 
@@ -620,14 +749,25 @@ local function setupESP(player)
                 if STATE.ESPBox then
                     Box.Size = Vector2.new(width, height)
                     Box.Position = Vector2.new(hrpPos.X - width / 2, headScreen.Y)
+                    Box.Color = espClr
                     Box.Visible = true
                 else
                     Box.Visible = false
                 end
 
+                if STATE.ESPBox and STATE.ESPBoxFill then
+                    BoxFill.Size = Vector2.new(width, height)
+                    BoxFill.Position = Vector2.new(hrpPos.X - width / 2, headScreen.Y)
+                    BoxFill.Color = espClr
+                    BoxFill.Visible = true
+                else
+                    BoxFill.Visible = false
+                end
+
                 if STATE.ESPTracer then
                     Tracer.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
                     Tracer.To = Vector2.new(hrpPos.X, footScreen.Y)
+                    Tracer.Color = espClr
                     Tracer.Visible = true
                 else
                     Tracer.Visible = false
@@ -636,6 +776,7 @@ local function setupESP(player)
                 if STATE.ESPName then
                     Name.Text = player.DisplayName
                     Name.Position = Vector2.new(hrpPos.X, headScreen.Y - 18)
+                    Name.Color = espClr
                     Name.Visible = true
                 else
                     Name.Visible = false
@@ -644,6 +785,7 @@ local function setupESP(player)
                 if STATE.ESPDistance then
                     DistText.Text = string.format("[%dm]", math.floor(dist))
                     DistText.Position = Vector2.new(hrpPos.X, footScreen.Y + 2)
+                    DistText.Color = espClr
                     DistText.Visible = true
                 else
                     DistText.Visible = false
@@ -678,6 +820,7 @@ local function setupESP(player)
                             if on1 or on2 then
                                 line.From = Vector2.new(p1C.X, p1C.Y)
                                 line.To = Vector2.new(p2C.X, p2C.Y)
+                                line.Color = espClr
                                 line.Visible = true
                             else
                                 line.Visible = false
@@ -691,6 +834,7 @@ local function setupESP(player)
                 end
             else
                 Box.Visible = false
+                BoxFill.Visible = false
                 Tracer.Visible = false
                 Name.Visible = false
                 DistText.Visible = false
@@ -700,6 +844,7 @@ local function setupESP(player)
             end
         else
             Box.Visible = false
+            BoxFill.Visible = false
             Tracer.Visible = false
             Name.Visible = false
             DistText.Visible = false
@@ -738,748 +883,671 @@ end
 Players.PlayerAdded:Connect(setupESP)
 Players.PlayerRemoving:Connect(removeESP)
 
-
 -----------------------------------
--- GUI CREATION (PROFESSIONAL & RESPONSIVE)
+-- CHAMS ESP
 -----------------------------------
 
-local TweenService = game:GetService("TweenService")
-local TWEEN_INFO = TweenInfo.new(0.25, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+local CHAMS_OBJECTS = {}
 
-local guiParent = pcall(function() return CoreGui.Name end) and CoreGui or LocalPlayer:WaitForChild("PlayerGui")
-local screenGui = Instance.new("ScreenGui", guiParent)
-screenGui.Name = "SigmaUI_Pro"
-screenGui.ResetOnSpawn = false
-screenGui.IgnoreGuiInset = true
+local function applyChamsToChar(player, char)
+    task.defer(function()
+        if not char or not char.Parent then return end
+        for _, v in ipairs(char:GetChildren()) do
+            if v:IsA("Highlight") and v.Name == "_RR_Chams" then
+                pcall(function() v:Destroy() end)
+            end
+        end
+        local hl = Instance.new("Highlight")
+        hl.Name = "_RR_Chams"
+        hl.FillColor = Color3.fromRGB(STATE.ChamsR, STATE.ChamsG, STATE.ChamsB)
+        hl.OutlineTransparency = 1
+        hl.FillTransparency = 0.5
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Enabled = STATE.ChamsESP and STATE.Master
+        hl.Parent = char
+        if CHAMS_OBJECTS[player] then
+            CHAMS_OBJECTS[player].hl = hl
+        end
+    end)
+end
 
--- Theme Constants
-local UI_BG = Color3.fromRGB(10, 10, 12)
-local UI_SECTION = Color3.fromRGB(15, 15, 17)
-local UI_STROKE = Color3.fromRGB(35, 35, 42)
-local UI_ACCENT = Color3.fromRGB(85, 170, 255)
-local UI_TEXT = Color3.fromRGB(240, 240, 240)
-local UI_TEXT_MUTED = Color3.fromRGB(140, 140, 140)
-local FONT_REG = Enum.Font.GothamMedium
-local FONT_BOLD = Enum.Font.GothamBold
-
-local uiMain = Instance.new("Frame", screenGui)
-uiMain.Size = UDim2.new(0, 520, 0, 380)
-uiMain.Position = UDim2.new(0.5, -260, 0.5, -190)
-uiMain.BackgroundColor3 = UI_BG
-uiMain.BorderSizePixel = 0
-uiMain.Active = true
-
-local mainStroke = Instance.new("UIStroke", uiMain)
-mainStroke.Color = UI_STROKE
-mainStroke.Thickness = 1
-
-local accentLine = Instance.new("Frame", uiMain)
-accentLine.Size = UDim2.new(1, 0, 0, 2)
-accentLine.BackgroundColor3 = UI_ACCENT
-accentLine.BorderSizePixel = 0
-
-local topBar = Instance.new("Frame", uiMain)
-topBar.Size = UDim2.new(1, 0, 0, 38)
-topBar.Position = UDim2.new(0, 0, 0, 2)
-topBar.BackgroundTransparency = 1
-topBar.Active = true
-
-local topSeparator = Instance.new("Frame", uiMain)
-topSeparator.Size = UDim2.new(1, 0, 0, 1)
-topSeparator.Position = UDim2.new(0, 0, 0, 40)
-topSeparator.BackgroundColor3 = UI_STROKE
-topSeparator.BorderSizePixel = 0
-
-local logoMark = Instance.new("Frame", topBar)
-logoMark.Size = UDim2.new(0, 8, 0, 8)
-logoMark.Position = UDim2.new(0, 16, 0.5, -4)
-logoMark.BackgroundColor3 = UI_ACCENT
-logoMark.BorderSizePixel = 0
-
-local titleLabel = Instance.new("TextLabel", topBar)
-titleLabel.Size = UDim2.new(0, 200, 1, 0)
-titleLabel.Position = UDim2.new(0, 32, 0, 0)
-titleLabel.BackgroundTransparency = 1
-titleLabel.RichText = true
-titleLabel.Text = 'RIVALS <font color="#8C8C8C">RAGE</font>'
-titleLabel.TextColor3 = UI_TEXT
-titleLabel.Font = FONT_BOLD
-titleLabel.TextSize = 14
-titleLabel.TextXAlignment = Enum.TextXAlignment.Left
-
-local keyHint = Instance.new("TextLabel", topBar)
-keyHint.Size = UDim2.new(0, 30, 1, 0)
-keyHint.Position = UDim2.new(1, -70, 0, 0)
-keyHint.BackgroundTransparency = 1
-keyHint.Text = "[K]"
-keyHint.TextColor3 = UI_TEXT_MUTED
-keyHint.Font = FONT_REG
-keyHint.TextSize = 12
-
-local closeBtn = Instance.new("TextButton", topBar)
-closeBtn.Size = UDim2.new(0, 38, 1, 0)
-closeBtn.Position = UDim2.new(1, -38, 0, 0)
-closeBtn.BackgroundTransparency = 1
-closeBtn.Text = "X"
-closeBtn.TextColor3 = UI_TEXT_MUTED
-closeBtn.Font = FONT_BOLD
-closeBtn.TextSize = 13
-closeBtn.AutoButtonColor = false
-
-closeBtn.MouseEnter:Connect(function()
-    TweenService:Create(closeBtn, TWEEN_INFO, {TextColor3 = Color3.fromRGB(255, 95, 95)}):Play()
-end)
-closeBtn.MouseLeave:Connect(function()
-    TweenService:Create(closeBtn, TWEEN_INFO, {TextColor3 = UI_TEXT_MUTED}):Play()
-end)
-
-local dragging, dragInput, dragStart, startPos
-
-topBar.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = input.Position
-        startPos = uiMain.Position
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
+local function setupChamsForPlayer(player)
+    if player == LocalPlayer then return end
+    if CHAMS_OBJECTS[player] then
+        pcall(function()
+            if CHAMS_OBJECTS[player].charConn then
+                CHAMS_OBJECTS[player].charConn:Disconnect()
             end
         end)
     end
-end)
-
-topBar.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-        dragInput = input
+    CHAMS_OBJECTS[player] = {}
+    if player.Character then
+        applyChamsToChar(player, player.Character)
     end
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-    if input == dragInput and dragging then
-        local delta = input.Position - dragStart
-        uiMain.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-    end
-end)
-
-local function sendNotification(title, text, duration)
-    local notifArea = screenGui:FindFirstChild("NotifArea")
-    if not notifArea then
-        notifArea = Instance.new("Frame", screenGui)
-        notifArea.Name = "NotifArea"
-        notifArea.Size = UDim2.new(0, 260, 1, -40)
-        notifArea.Position = UDim2.new(1, -280, 0, 20)
-        notifArea.BackgroundTransparency = 1
-        
-        local notifLayout = Instance.new("UIListLayout", notifArea)
-        notifLayout.SortOrder = Enum.SortOrder.LayoutOrder
-        notifLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
-        notifLayout.Padding = UDim.new(0, 10)
-    end
-
-    local notif = Instance.new("Frame", notifArea)
-    notif.Size = UDim2.new(1, 0, 0, 65)
-    notif.BackgroundColor3 = UI_SECTION
-    notif.BorderSizePixel = 0
-    notif.BackgroundTransparency = 1
-    
-    local stroke = Instance.new("UIStroke", notif)
-    stroke.Color = UI_STROKE
-    stroke.Thickness = 1
-    stroke.Transparency = 1
-    
-    local accent = Instance.new("Frame", notif)
-    accent.Size = UDim2.new(0, 3, 1, 0)
-    accent.BackgroundColor3 = UI_ACCENT
-    accent.BorderSizePixel = 0
-    accent.BackgroundTransparency = 1
-    
-    local titleLbl = Instance.new("TextLabel", notif)
-    titleLbl.Size = UDim2.new(1, -30, 0, 20)
-    titleLbl.Position = UDim2.new(0, 15, 0, 10)
-    titleLbl.BackgroundTransparency = 1
-    titleLbl.Text = title
-    titleLbl.TextColor3 = UI_ACCENT
-    titleLbl.Font = FONT_BOLD
-    titleLbl.TextSize = 14
-    titleLbl.TextXAlignment = Enum.TextXAlignment.Left
-    titleLbl.TextTransparency = 1
-    
-    local textLbl = Instance.new("TextLabel", notif)
-    textLbl.Size = UDim2.new(1, -30, 0, 25)
-    textLbl.Position = UDim2.new(0, 15, 0, 30)
-    textLbl.BackgroundTransparency = 1
-    textLbl.Text = text
-    textLbl.TextColor3 = UI_TEXT
-    textLbl.Font = FONT_REG
-    textLbl.TextSize = 13
-    textLbl.TextWrapped = true
-    textLbl.TextXAlignment = Enum.TextXAlignment.Left
-    textLbl.TextTransparency = 1
-    
-    TweenService:Create(notif, TWEEN_INFO, {BackgroundTransparency = 0}):Play()
-    TweenService:Create(stroke, TWEEN_INFO, {Transparency = 0}):Play()
-    TweenService:Create(accent, TWEEN_INFO, {BackgroundTransparency = 0}):Play()
-    TweenService:Create(titleLbl, TWEEN_INFO, {TextTransparency = 0}):Play()
-    TweenService:Create(textLbl, TWEEN_INFO, {TextTransparency = 0}):Play()
-    
-    task.delay(duration or 5, function()
-        local tw = TweenService:Create(notif, TWEEN_INFO, {BackgroundTransparency = 1})
-        TweenService:Create(stroke, TWEEN_INFO, {Transparency = 1}):Play()
-        TweenService:Create(accent, TWEEN_INFO, {BackgroundTransparency = 1}):Play()
-        TweenService:Create(titleLbl, TWEEN_INFO, {TextTransparency = 1}):Play()
-        TweenService:Create(textLbl, TWEEN_INFO, {TextTransparency = 1}):Play()
-        tw:Play()
-        tw.Completed:Wait()
-        notif:Destroy()
+    CHAMS_OBJECTS[player].charConn = player.CharacterAdded:Connect(function(char)
+        applyChamsToChar(player, char)
     end)
 end
 
-local function toggleUI()
-    uiMain.Visible = not uiMain.Visible
-    if not uiMain.Visible then
-        sendNotification("RIVALS", "Menu minimized. Press K to reopen.", 5)
-    end
+local function cleanupChamsForPlayer(player)
+    local data = CHAMS_OBJECTS[player]
+    if not data then return end
+    pcall(function()
+        if data.charConn then data.charConn:Disconnect() end
+        if data.hl and data.hl.Parent then data.hl:Destroy() end
+    end)
+    CHAMS_OBJECTS[player] = nil
 end
 
-closeBtn.MouseButton1Click:Connect(toggleUI)
+for _, p in pairs(Players:GetPlayers()) do setupChamsForPlayer(p) end
+Players.PlayerAdded:Connect(setupChamsForPlayer)
+Players.PlayerRemoving:Connect(cleanupChamsForPlayer)
 
-UserInputService.InputBegan:Connect(function(input, gpe)
-    if gpe then return end
-    if input.KeyCode == Enum.KeyCode.K then
-        toggleUI()
+RunService.RenderStepped:Connect(function()
+    if not STATE.ChamsESP or not STATE.Master then
+        for _, data in pairs(CHAMS_OBJECTS) do
+            if data.hl and data.hl.Parent then data.hl.Enabled = false end
+        end
+        return
+    end
+    local chamsColor = STATE.RainbowVisuals and getRainbow(0.33) or Color3.fromRGB(STATE.ChamsR, STATE.ChamsG, STATE.ChamsB)
+    for player, data in pairs(CHAMS_OBJECTS) do
+        if data.hl and data.hl.Parent then
+            local isEnemy = not STATE.TeamCheck
+                or player.Team == nil
+                or LocalPlayer.Team == nil
+                or player.Team ~= LocalPlayer.Team
+            local char = player.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local isAlive = hum and hum.Health > 0
+            data.hl.Enabled = isEnemy and isAlive
+            data.hl.FillColor = chamsColor
+        end
     end
 end)
 
-local sidebar = Instance.new("Frame", uiMain)
-sidebar.Size = UDim2.new(0, 130, 1, -41)
-sidebar.Position = UDim2.new(0, 0, 0, 41)
-sidebar.BackgroundColor3 = UI_SECTION
-sidebar.BorderSizePixel = 0
+-----------------------------------
+-- BULLET TRACERS & IMPACT MARKERS
+-----------------------------------
 
-local sidebarPad = Instance.new("UIPadding", sidebar)
-sidebarPad.PaddingTop = UDim.new(0, 8)
+local Debris = game:GetService("Debris")
 
-local sidebarStroke = Instance.new("Frame", uiMain)
-sidebarStroke.Size = UDim2.new(0, 1, 1, -41)
-sidebarStroke.Position = UDim2.new(0, 130, 0, 41)
-sidebarStroke.BackgroundColor3 = UI_STROKE
-sidebarStroke.BorderSizePixel = 0
-
-local sidebarLayout = Instance.new("UIListLayout", sidebar)
-sidebarLayout.SortOrder = Enum.SortOrder.LayoutOrder
-sidebarLayout.Padding = UDim.new(0, 2)
-
-local contentArea = Instance.new("Frame", uiMain)
-contentArea.Size = UDim2.new(1, -131, 1, -41)
-contentArea.Position = UDim2.new(0, 131, 0, 41)
-contentArea.BackgroundColor3 = UI_BG
-contentArea.BorderSizePixel = 0
-
-local tabButtons = {}
-local tabPages = {}
-local currentTabIdx = 1
-
-local function selectTab(idx)
-    currentTabIdx = idx
-    for i, p in pairs(tabPages) do 
-        p.Visible = (i == idx)
-        if i == idx then p.CanvasPosition = Vector2.new(0, 0) end
-    end
-    for i, b in pairs(tabButtons) do
-        local isSelected = (i == idx)
-        
-        TweenService:Create(b.btn, TWEEN_INFO, {
-            BackgroundColor3 = isSelected and Color3.fromRGB(22, 22, 26) or UI_SECTION,
-            BackgroundTransparency = isSelected and 0 or 1
-        }):Play()
-
-        TweenService:Create(b.btn, TWEEN_INFO, {
-            TextColor3 = isSelected and UI_TEXT or UI_TEXT_MUTED
-        }):Play()
-
-        TweenService:Create(b.indicator, TWEEN_INFO, {
-            BackgroundTransparency = isSelected and 0 or 1
-        }):Play()
-    end
+local function cloneBeam(beam)
+    if not STATE.BulletTracers or not STATE.Master then return end
+    if beam:GetAttribute("IsClone") then return end
+    if not beam.Attachment0 or not beam.Attachment1 then return end
+    local att0 = beam.Attachment0:Clone()
+    local att1 = beam.Attachment1:Clone()
+    att0.Parent = workspace.Terrain
+    att1.Parent = workspace.Terrain
+    local clone = beam:Clone()
+    clone:SetAttribute("IsClone", true)
+    clone.Color = ColorSequence.new(Color3.fromRGB(STATE.TracerR, STATE.TracerG, STATE.TracerB))
+    clone.LightEmission = 0
+    clone.Transparency = NumberSequence.new(0.4)
+    clone.Attachment0 = att0
+    clone.Attachment1 = att1
+    clone.Parent = workspace
+    Debris:AddItem(clone, 2)
+    Debris:AddItem(att0, 2)
+    Debris:AddItem(att1, 2)
 end
 
-local function createTab(tabName)
-    local btn = Instance.new("TextButton", sidebar)
-    btn.Size = UDim2.new(1, 0, 0, 36)
-    btn.BackgroundTransparency = 1
-    btn.BorderSizePixel = 0
-    btn.AutoButtonColor = false
-    btn.Text = "    " .. tabName
-    btn.TextColor3 = UI_TEXT_MUTED
-    btn.Font = FONT_REG
-    btn.TextSize = 13
-    btn.TextXAlignment = Enum.TextXAlignment.Left
-
-    local indicator = Instance.new("Frame", btn)
-    indicator.Size = UDim2.new(0, 3, 0, 20)
-    indicator.Position = UDim2.new(0, 0, 0.5, -10)
-    indicator.BackgroundColor3 = UI_ACCENT
-    indicator.BorderSizePixel = 0
-    indicator.BackgroundTransparency = 1
-
-    local page = Instance.new("ScrollingFrame", contentArea)
-    page.Size = UDim2.new(1, -24, 1, -24)
-    page.Position = UDim2.new(0, 12, 0, 12)
-    page.BackgroundTransparency = 1
-    page.ScrollBarThickness = 3
-    page.ScrollBarImageColor3 = UI_STROKE
-    page.BorderSizePixel = 0
-    page.Visible = false
-
-    local layout = Instance.new("UIListLayout", page)
-    layout.Padding = UDim.new(0, 8)
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    
-    layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        page.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 20)
-    end)
-
-    table.insert(tabButtons, {btn = btn, indicator = indicator})
-    table.insert(tabPages, page)
-    local idx = #tabButtons
-
-    btn.MouseEnter:Connect(function()
-        if currentTabIdx ~= idx then
-            TweenService:Create(btn, TWEEN_INFO, {TextColor3 = UI_TEXT}):Play()
+local function cloneImpactMarker(original)
+    if not STATE.ImpactMarkers or not STATE.Master then return end
+    local clone = original:Clone()
+    pcall(function()
+        local color = Color3.fromRGB(STATE.ImpactR, STATE.ImpactG, STATE.ImpactB)
+        if clone:IsA("BasePart") then clone.Color = color end
+        for _, v in ipairs(clone:GetDescendants()) do
+            if v:IsA("BasePart") then v.Color = color end
+            if v:IsA("Beam") then v.Color = ColorSequence.new(color) end
+            if v:IsA("ParticleEmitter") then v.Color = ColorSequence.new(color) end
         end
     end)
-    btn.MouseLeave:Connect(function()
-        if currentTabIdx ~= idx then
-            TweenService:Create(btn, TWEEN_INFO, {TextColor3 = UI_TEXT_MUTED}):Play()
-        end
-    end)
-
-    btn.MouseButton1Click:Connect(function() selectTab(idx) end)
-
-    return page
-end
-
-local function addToggle(page, labelText, stateKey)
-    local row = Instance.new("TextButton", page)
-    row.Size = UDim2.new(1, -6, 0, 30)
-    row.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    row.BackgroundTransparency = 1
-    row.BorderSizePixel = 0
-    row.Text = ""
-    row.AutoButtonColor = false
-    
-    local lbl = Instance.new("TextLabel", row)
-    lbl.Size = UDim2.new(1, -44, 1, 0)
-    lbl.Position = UDim2.new(0, 2, 0, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = labelText
-    lbl.TextColor3 = STATE[stateKey] and UI_TEXT or UI_TEXT_MUTED
-    lbl.Font = FONT_REG
-    lbl.TextSize = 13
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    
-    local box = Instance.new("Frame", row)
-    box.Size = UDim2.new(0, 18, 0, 18)
-    box.Position = UDim2.new(1, -24, 0.5, -9)
-    box.BackgroundColor3 = UI_BG
-    box.BorderSizePixel = 0
-    
-    local boxStroke = Instance.new("UIStroke", box)
-    boxStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    boxStroke.Color = STATE[stateKey] and UI_ACCENT or UI_STROKE
-    boxStroke.Thickness = 1
-    
-    local fillDot = Instance.new("Frame", box)
-    fillDot.Size = UDim2.new(0, 10, 0, 10)
-    fillDot.Position = UDim2.new(0.5, -5, 0.5, -5)
-    fillDot.BackgroundColor3 = UI_ACCENT
-    fillDot.BorderSizePixel = 0
-    fillDot.BackgroundTransparency = STATE[stateKey] and 0 or 1
-    
-    row.MouseEnter:Connect(function()
-        TweenService:Create(row, TWEEN_INFO, {BackgroundTransparency = 0.96}):Play()
-    end)
-    row.MouseLeave:Connect(function()
-        TweenService:Create(row, TWEEN_INFO, {BackgroundTransparency = 1}):Play()
-    end)
-    
-    row.MouseButton1Click:Connect(function()
-        STATE[stateKey] = not STATE[stateKey]
-        TweenService:Create(boxStroke, TWEEN_INFO, {Color = STATE[stateKey] and UI_ACCENT or UI_STROKE}):Play()
-        TweenService:Create(fillDot, TWEEN_INFO, {BackgroundTransparency = STATE[stateKey] and 0 or 1}):Play()
-        TweenService:Create(lbl, TWEEN_INFO, {TextColor3 = STATE[stateKey] and UI_TEXT or UI_TEXT_MUTED}):Play()
-        saveConfig()
+    clone:SetAttribute("IsClone", true)
+    clone.Parent = workspace
+    task.spawn(function()
+        task.wait(2)
+        pcall(function() clone:Destroy() end)
     end)
 end
 
-local function addSlider(page, labelText, stateKey, min, max)
-    local holder = Instance.new("Frame", page)
-    holder.Size = UDim2.new(1, -6, 0, 40)
-    holder.BackgroundTransparency = 1
-    
-    local lbl = Instance.new("TextLabel", holder)
-    lbl.Size = UDim2.new(1, -64, 0, 16)
-    lbl.Position = UDim2.new(0, 2, 0, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = labelText
-    lbl.TextColor3 = UI_TEXT
-    lbl.Font = FONT_REG
-    lbl.TextSize = 13
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-
-    local valLbl = Instance.new("TextLabel", holder)
-    valLbl.Size = UDim2.new(0, 56, 0, 16)
-    valLbl.Position = UDim2.new(1, -58, 0, 0)
-    valLbl.BackgroundTransparency = 1
-    valLbl.Text = tostring(STATE[stateKey])
-    valLbl.TextColor3 = UI_ACCENT
-    valLbl.Font = FONT_BOLD
-    valLbl.TextSize = 13
-    valLbl.TextXAlignment = Enum.TextXAlignment.Right
-
-    local bg = Instance.new("TextButton", holder)
-    bg.Size = UDim2.new(1, -4, 0, 8)
-    bg.Position = UDim2.new(0, 2, 1, -12)
-    bg.BackgroundColor3 = UI_STROKE
-    bg.BorderSizePixel = 0
-    bg.Text = ""
-    bg.AutoButtonColor = false
-    
-    local fill = Instance.new("Frame", bg)
-    fill.Size = UDim2.new((STATE[stateKey] - min)/(max - min), 0, 1, 0)
-    fill.BackgroundColor3 = UI_ACCENT
-    fill.BorderSizePixel = 0
-    
-    local dragging = false
-    local function update(input)
-        local rel = math.clamp((input.Position.X - bg.AbsolutePosition.X) / bg.AbsoluteSize.X, 0, 1)
-        STATE[stateKey] = math.floor(min + (max - min) * rel)
-        TweenService:Create(fill, TweenInfo.new(0.05, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(rel, 0, 1, 0)}):Play()
-        valLbl.Text = tostring(STATE[stateKey])
+task.defer(function()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Beam") then pcall(cloneBeam, obj) end
+        if obj.Name == "ImpactMarkerBullet" and not obj:GetAttribute("IsClone") then pcall(cloneImpactMarker, obj) end
     end
-    
-    bg.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            update(input)
-        end
-    end)
-    UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            if dragging then saveConfig() end
-            dragging = false
-        end
-    end)
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-            update(input)
-        end
-    end)
+end)
+
+workspace.DescendantAdded:Connect(function(obj)
+    if obj:IsA("Beam") then
+        task.defer(function() pcall(cloneBeam, obj) end)
+    elseif obj.Name == "ImpactMarkerBullet" and not obj:GetAttribute("IsClone") then
+        task.defer(function() pcall(cloneImpactMarker, obj) end)
+    end
+end)
+
+-----------------------------------
+-- AIM TRAJECTORY VISUALIZER
+-----------------------------------
+
+local TRAJ_DATA = {}         -- [player] = { points = {} }
+local TRAJ_MAX_PTS   = 15
+local TRAJ_LOOK_DIST = 12    -- studs forward to project each sample
+local TRAJ_SUBSEG    = 5     -- Catmull-Rom sub-divisions per gap
+local TRAJ_INTERVAL  = 1/30  -- sample rate (seconds)
+local _trajAccum = 0
+local TRAJ_LINE_POOL = {}
+local TRAJ_LINES_USED = 0
+
+-- Catmull-Rom interpolation for Vector2
+local function catmullV2(p0, p1, p2, p3, t)
+    local t2 = t * t
+    local t3 = t2 * t
+    return 0.5 * (
+        (2 * p1)
+        + (-p0 + p2) * t
+        + (2*p0 - 5*p1 + 4*p2 - p3) * t2
+        + (-p0 + 3*p1 - 3*p2 + p3) * t3
+    )
 end
 
-local function addDropdown(page, labelText, stateKey, options, onChanged)
-    local holder = Instance.new("Frame", page)
-    holder.Size = UDim2.new(1, -6, 0, 30)
-    holder.BackgroundTransparency = 1
-
-    local lbl = Instance.new("TextLabel", holder)
-    lbl.Size = UDim2.new(0.55, 0, 1, 0)
-    lbl.Position = UDim2.new(0, 2, 0, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = labelText
-    lbl.TextColor3 = UI_TEXT
-    lbl.Font = FONT_REG
-    lbl.TextSize = 13
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-
-    local valBtn = Instance.new("TextButton", holder)
-    valBtn.Size = UDim2.new(0.42, 0, 0, 22)
-    valBtn.Position = UDim2.new(0.57, 0, 0.5, -11)
-    valBtn.BackgroundColor3 = UI_SECTION
-    valBtn.BorderSizePixel = 0
-    valBtn.Text = tostring(STATE[stateKey])
-    valBtn.TextColor3 = UI_ACCENT
-    valBtn.Font = FONT_BOLD
-    valBtn.TextSize = 12
-    valBtn.AutoButtonColor = false
-
-    local valStroke = Instance.new("UIStroke", valBtn)
-    valStroke.Color = UI_STROKE
-    valStroke.Thickness = 1
-
-    local activeList, activeBackdrop = nil, nil
-
-    local function closeList()
-        if activeList   then activeList:Destroy();   activeList   = nil end
-        if activeBackdrop then activeBackdrop:Destroy(); activeBackdrop = nil end
+local function getTrajLine(idx)
+    if not TRAJ_LINE_POOL[idx] then
+        local ln = Drawing.new("Line")
+        ln.Thickness = 2.5
+        ln.Visible = false
+        TRAJ_LINE_POOL[idx] = ln
     end
+    return TRAJ_LINE_POOL[idx]
+end
 
-    valBtn.MouseButton1Click:Connect(function()
-        if activeList then closeList() return end
+local function setupTrajectory(player)
+    TRAJ_DATA[player] = { points = {} }
+end
 
-        -- Transparent backdrop catches outside clicks
-        activeBackdrop = Instance.new("TextButton", screenGui)
-        activeBackdrop.Size = UDim2.new(1, 0, 1, 0)
-        activeBackdrop.BackgroundTransparency = 1
-        activeBackdrop.Text = ""
-        activeBackdrop.ZIndex = 19
-        activeBackdrop.MouseButton1Click:Connect(closeList)
+local function cleanupTrajectory(player)
+    TRAJ_DATA[player] = nil
+end
 
-        activeList = Instance.new("Frame", screenGui)
-        activeList.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
-        activeList.BorderSizePixel = 0
-        activeList.ZIndex = 20
-        activeList.ClipsDescendants = true
+for _, p in pairs(Players:GetPlayers()) do setupTrajectory(p) end
+Players.PlayerAdded:Connect(setupTrajectory)
+Players.PlayerRemoving:Connect(cleanupTrajectory)
 
-        local listStroke = Instance.new("UIStroke", activeList)
-        listStroke.Color = UI_STROKE
-        listStroke.Thickness = 1
-        listStroke.ZIndex = 20
-
-        local scroll = Instance.new("ScrollingFrame", activeList)
-        scroll.Size = UDim2.new(1, 0, 1, 0)
-        scroll.BackgroundTransparency = 1
-        scroll.ScrollBarThickness = 3
-        scroll.ScrollBarImageColor3 = UI_STROKE
-        scroll.BorderSizePixel = 0
-        scroll.ZIndex = 20
-
-        local layout = Instance.new("UIListLayout", scroll)
-        layout.SortOrder = Enum.SortOrder.LayoutOrder
-        layout.Padding = UDim.new(0, 0)
-
-        local ITEM_H = 30
-        for i, opt in ipairs(options) do
-            local isCurrent = (opt == STATE[stateKey])
-            local optBtn = Instance.new("TextButton", scroll)
-            optBtn.Size = UDim2.new(1, 0, 0, ITEM_H)
-            optBtn.BackgroundColor3 = isCurrent and UI_SECTION or Color3.fromRGB(18, 18, 22)
-            optBtn.BackgroundTransparency = 0
-            optBtn.BorderSizePixel = 0
-            optBtn.Text = "   " .. opt
-            optBtn.TextColor3 = isCurrent and UI_ACCENT or UI_TEXT_MUTED
-            optBtn.Font = FONT_REG
-            optBtn.TextSize = 13
-            optBtn.TextXAlignment = Enum.TextXAlignment.Left
-            optBtn.AutoButtonColor = false
-            optBtn.ZIndex = 20
-            optBtn.LayoutOrder = i
-
-            optBtn.MouseEnter:Connect(function()
-                if opt ~= STATE[stateKey] then
-                    optBtn.BackgroundColor3 = UI_SECTION
-                    optBtn.TextColor3 = UI_TEXT
-                end
-            end)
-            optBtn.MouseLeave:Connect(function()
-                if opt ~= STATE[stateKey] then
-                    optBtn.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
-                    optBtn.TextColor3 = UI_TEXT_MUTED
-                end
-            end)
-            optBtn.MouseButton1Click:Connect(function()
-                STATE[stateKey] = opt
-                valBtn.Text = opt
-                if onChanged then onChanged(opt) end
-                saveConfig()
-                closeList()
-            end)
-        end
-
-        -- Position the list on the next frame once AbsolutePosition is valid
-        task.defer(function()
-            if not activeList or not activeList.Parent then return end
-            local abs     = valBtn.AbsolutePosition
-            local absSize = valBtn.AbsoluteSize
-            local listH   = math.min(#options * ITEM_H, 210)
-            local listW   = math.max(absSize.X, 110)
-            scroll.CanvasSize = UDim2.new(0, 0, 0, #options * ITEM_H)
-            activeList.Size = UDim2.new(0, listW, 0, listH)
-            if abs.Y + absSize.Y + listH > Camera.ViewportSize.Y - 20 then
-                activeList.Position = UDim2.new(0, abs.X, 0, abs.Y - listH)
-            else
-                activeList.Position = UDim2.new(0, abs.X, 0, abs.Y + absSize.Y + 2)
+-- Sample each player's look-target at fixed rate
+RunService.Heartbeat:Connect(function(dt)
+    _trajAccum = _trajAccum + dt
+    if _trajAccum < TRAJ_INTERVAL then return end
+    _trajAccum = _trajAccum % TRAJ_INTERVAL
+    if not STATE.AimTrajectory or not STATE.Master then return end
+    for player, data in pairs(TRAJ_DATA) do
+        local target
+        if player == LocalPlayer then
+            -- local player: sample exactly where their camera is aimed
+            if Camera then
+                target = Camera.CFrame.Position + Camera.CFrame.LookVector * TRAJ_LOOK_DIST
             end
-        end)
-    end)
-end
-
-local function addSection(page, text)
-    local holder = Instance.new("Frame", page)
-    holder.Size = UDim2.new(1, -6, 0, 24)
-    holder.BackgroundTransparency = 1
-
-    local lbl = Instance.new("TextLabel", holder)
-    lbl.Size = UDim2.new(1, -4, 0, 14)
-    lbl.Position = UDim2.new(0, 2, 1, -16)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = text:upper()
-    lbl.TextColor3 = UI_TEXT_MUTED
-    lbl.Font = FONT_BOLD
-    lbl.TextSize = 11
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-end
-
-local function addButton(page, labelText, btnColor, callback)
-    local row = Instance.new("TextButton", page)
-    row.Size = UDim2.new(1, -6, 0, 30)
-    row.BackgroundColor3 = btnColor
-    row.BackgroundTransparency = 0.8
-    row.BorderSizePixel = 0
-    row.Text = labelText
-    row.TextColor3 = btnColor
-    row.Font = FONT_BOLD
-    row.TextSize = 13
-    row.AutoButtonColor = false
-
-    local rowStroke = Instance.new("UIStroke", row)
-    rowStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    rowStroke.Color = btnColor
-    rowStroke.Thickness = 1
-
-    row.MouseEnter:Connect(function()
-        TweenService:Create(row, TWEEN_INFO, {BackgroundTransparency = 0.55}):Play()
-    end)
-    row.MouseLeave:Connect(function()
-        TweenService:Create(row, TWEEN_INFO, {BackgroundTransparency = 0.8}):Play()
-    end)
-    row.MouseButton1Click:Connect(function()
-        if callback then callback() end
-    end)
-end
-
-local tCombat = createTab("Combat")
-local tAimbot = createTab("Aimbot")
-local tVisuals = createTab("Visuals")
-local tMovement = createTab("Movement")
-
-addSection(tCombat, "Master")
-addToggle(tCombat, "Enabled", "Master")
-addSection(tCombat, "Weapon")
-addToggle(tCombat, "Silent Aim", "SilentAim")
-addToggle(tCombat, "Fast Fire", "FastWeaps")
-addToggle(tCombat, "No Recoil", "NoRecoil")
-addToggle(tCombat, "Auto Click", "AutoClick")
-addSection(tCombat, "Triggerbot")
-addToggle(tCombat, "Triggerbot", "Triggerbot")
-addSlider(tCombat, "Delay (ms)", "TriggerbotDelay", 0, 500)
-
-addSection(tAimbot, "Aimbot")
-addToggle(tAimbot, "Aimbot", "Aimbot")
-addDropdown(tAimbot, "Aim Key", "AimKeyName", AIM_KEYBIND_OPTIONS, function(val)
-    STATE.AimKey = AIM_KEYBIND_MAP[val]
+        else
+            local char = getCharacter(player)
+            local head = char and (char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart"))
+            if not head then continue end
+            target = head.Position + head.CFrame.LookVector * TRAJ_LOOK_DIST
+        end
+        if not target then continue end
+        local pts = data.points
+        pts[#pts + 1] = target
+        while #pts > TRAJ_MAX_PTS do table.remove(pts, 1) end
+    end
 end)
-addSlider(tAimbot, "Smoothness", "AimSmoothness", 1, 20)
-addSlider(tAimbot, "FOV", "AimFOV", 50, 600)
-addSection(tAimbot, "Filters")
-addToggle(tAimbot, "Visible Check", "AimVisibleOnly")
-addToggle(tAimbot, "Humanize", "AimHumanize")
-addSlider(tAimbot, "Max Distance", "AimMaxDistance", 0, 2000)
 
-addSection(tVisuals, "ESP")
-addToggle(tVisuals, "Enabled", "ESP")
-addToggle(tVisuals, "Team Check", "ESPTeamCheck")
-addSlider(tVisuals, "Max Range", "ESPMaxDistance", 50, 500)
-addSection(tVisuals, "Elements")
-addToggle(tVisuals, "Boxes", "ESPBox")
-addToggle(tVisuals, "Tracers", "ESPTracer")
-addToggle(tVisuals, "Names", "ESPName")
-addToggle(tVisuals, "Distance", "ESPDistance")
-addToggle(tVisuals, "Health Bars", "ESPHealthBar")
-addToggle(tVisuals, "Skeleton", "ESPSkeleton")
+-- Render smooth bezier trails
+RunService.RenderStepped:Connect(function()
+    local lineIdx = 0
+    local color = STATE.RainbowVisuals and getRainbow(0.67) or Color3.fromRGB(STATE.AimTrajR, STATE.AimTrajG, STATE.AimTrajB)
 
-addSection(tMovement, "Speed")
-addToggle(tMovement, "Walk Speed", "WalkSpeedEnabled")
-addSlider(tMovement, "Speed", "WalkSpeed", 16, 200)
-addSection(tMovement, "Jump")
-addToggle(tMovement, "Jump Power", "JumpPowerEnabled")
-addSlider(tMovement, "Power", "JumpPower", 50, 300)
-addToggle(tMovement, "Infinite Jump", "InfJump")
-addSection(tMovement, "Teleport")
-addToggle(tMovement, "TP to Cursor [T]", "TPToCursor")
-addToggle(tMovement, "TP to Players", "Teleport")
+    if STATE.AimTrajectory and STATE.Master then
+        for player, data in pairs(TRAJ_DATA) do
+            local isLocal = (player == LocalPlayer)
+            local isEnemy = not STATE.TeamCheck
+                or player.Team == nil
+                or LocalPlayer.Team == nil
+                or player.Team ~= LocalPlayer.Team
+            if not isLocal and not isEnemy then continue end
 
-local tMisc = createTab("Misc")
-addSection(tMisc, "Security")
-addToggle(tMisc, "AC Bypass", "AntiCheatBypass")
-addSection(tMisc, "Cosmetics")
-addToggle(tMisc, "Unlock All Skins", "UnlockSkins")
-addSection(tMisc, "Danger Zone")
-addButton(tMisc, "⚠  DESTROY SCRIPT", Color3.fromRGB(220, 55, 55), function()
-    -- Stop all feature loops immediately
-    STATE.Master        = false
-    STATE.Aimbot        = false
-    STATE.AimActive     = false
-    STATE.SilentAim     = false
-    STATE.Triggerbot    = false
-    STATE.AutoClick     = false
-    STATE.ESP           = false
-    STATE.FastWeaps     = false
-    STATE.WalkSpeedEnabled = false
-    STATE.JumpPowerEnabled = false
-    STATE.InfJump       = false
-    STATE.NoRecoil      = false
-    STATE.AntiCheatBypass = false
-    STATE.UnlockSkins   = false
+            local pts = data.points
+            local n = #pts
+            if n < 4 then continue end
 
-    -- Restore weapon stats to originals
+            -- Project world-space history to screen
+            local sp = {}
+            for i, wp in ipairs(pts) do
+                local s, _, depth = worldToScreen(wp)
+                sp[i] = (depth > 0) and s or false
+            end
+
+            -- Catmull-Rom through all consecutive valid quads
+            for i = 2, n - 2 do
+                local p0, p1, p2, p3 = sp[i-1], sp[i], sp[i+1], sp[i+2]
+                if not (p0 and p1 and p2 and p3) then continue end
+                local ageFrac  = (i - 1) / (n - 1)   -- 0=oldest, 1=newest
+                local transp   = 1 - ageFrac * 0.97   -- oldest: invisible, newest: nearly fully opaque
+                for s = 0, TRAJ_SUBSEG - 1 do
+                    local t0   = s / TRAJ_SUBSEG
+                    local t1   = (s + 1) / TRAJ_SUBSEG
+                    local from = catmullV2(p0, p1, p2, p3, t0)
+                    local to   = catmullV2(p0, p1, p2, p3, t1)
+                    lineIdx = lineIdx + 1
+                    local ln = getTrajLine(lineIdx)
+                    ln.From  = from
+                    ln.To    = to
+                    ln.Color = color
+                    ln.Transparency = transp
+                    ln.Visible = true
+                end
+            end
+        end
+    end
+
+    -- Hide any leftover pooled lines from prior frames
+    for i = lineIdx + 1, TRAJ_LINES_USED do
+        if TRAJ_LINE_POOL[i] then TRAJ_LINE_POOL[i].Visible = false end
+    end
+    TRAJ_LINES_USED = lineIdx
+end)
+
+-----------------------------------
+-- SPINNING CROSSHAIR (Drawing-based)
+-----------------------------------
+
+local _spinCXLines = {}
+local _spinCXAngle = 0
+local _spinCXReady = false
+local _spinCXSpeed = 120  -- degrees per second
+
+local function setupSpinCrosshair()
+    if _spinCXReady then return end
+    _spinCXReady = true
+    if not Drawing then return end
+    -- 4 radiating arms
+    for i = 1, 4 do
+        local ln = Drawing.new("Line")
+        ln.Thickness = 2
+        ln.Color = Color3.new(1, 1, 1)
+        ln.Transparency = 1
+        ln.Visible = false
+        _spinCXLines[i] = ln
+    end
+    -- Center dot
+    local dot = Drawing.new("Circle")
+    dot.Radius = 2
+    dot.Filled = true
+    dot.NumSides = 8
+    dot.Thickness = 1
+    dot.Color = Color3.new(1, 1, 1)
+    dot.Transparency = 1
+    dot.Visible = false
+    _spinCXLines[5] = dot
+end
+
+local function teardownSpinCrosshair()
+    _spinCXReady = false
+    for i = 1, 5 do
+        if _spinCXLines[i] then
+            pcall(function() _spinCXLines[i]:Remove() end)
+            _spinCXLines[i] = nil
+        end
+    end
+end
+
+RunService.RenderStepped:Connect(function(dt)
+    if STATE.SpinCrosshair and STATE.Master then
+        if not _spinCXReady then setupSpinCrosshair() end
+        _spinCXAngle = (_spinCXAngle + _spinCXSpeed * dt) % 360
+        local cx    = Camera.ViewportSize.X / 2
+        local cy    = Camera.ViewportSize.Y / 2
+        local inner = 6
+        local outer = 20
+        local color = STATE.RainbowVisuals and getRainbow(0.5) or Color3.new(1, 1, 1)
+        for i = 1, 4 do
+            local angle = math.rad(_spinCXAngle + (i - 1) * 90)
+            local ln = _spinCXLines[i]
+            if ln then
+                ln.From    = Vector2.new(cx + math.cos(angle) * inner, cy + math.sin(angle) * inner)
+                ln.To      = Vector2.new(cx + math.cos(angle) * outer, cy + math.sin(angle) * outer)
+                ln.Color   = color
+                ln.Visible = true
+            end
+        end
+        if _spinCXLines[5] then
+            _spinCXLines[5].Position = Vector2.new(cx, cy)
+            _spinCXLines[5].Color    = color
+            _spinCXLines[5].Visible  = true
+        end
+    elseif _spinCXReady then
+        teardownSpinCrosshair()
+    end
+end)
+
+-----------------------------------
+-- FLY
+-----------------------------------
+local _flyCleanedUp = true
+RunService.RenderStepped:Connect(function()
+    local want = STATE.Fly and STATE.Master
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+
+    if not want then
+        if not _flyCleanedUp and root then
+            local bv = root:FindFirstChild("_RR_FlyBV")
+            local bg = root:FindFirstChild("_RR_FlyBG")
+            if bv then bv:Destroy() end
+            if bg then bg:Destroy() end
+        end
+        if hum and hum.PlatformStand then hum.PlatformStand = false end
+        _flyCleanedUp = true
+        return
+    end
+
+    if not root or not hum then return end
+    _flyCleanedUp = false
+    hum.PlatformStand = true
+
+    local bv = root:FindFirstChild("_RR_FlyBV")
+    if not bv then
+        bv = Instance.new("BodyVelocity")
+        bv.Name = "_RR_FlyBV"
+        bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+        bv.Velocity = Vector3.new(0, 0, 0)
+        bv.Parent = root
+    end
+    local bg = root:FindFirstChild("_RR_FlyBG")
+    if not bg then
+        bg = Instance.new("BodyGyro")
+        bg.Name = "_RR_FlyBG"
+        bg.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
+        bg.D = 100
+        bg.P = 1e4
+        bg.Parent = root
+    end
+
+    local camCF = Camera.CFrame
+    local dir = Vector3.new(0, 0, 0)
+    if UserInputService:IsKeyDown(Enum.KeyCode.W)         then dir = dir + camCF.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.S)         then dir = dir - camCF.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.A)         then dir = dir - camCF.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.D)         then dir = dir + camCF.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.Space)     then dir = dir + Vector3.new(0,1,0) end
+    if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then dir = dir - Vector3.new(0,1,0) end
+
+    bv.Velocity = dir.Magnitude > 0 and (dir.Unit * 50) or Vector3.new(0, 0, 0)
+    bg.CFrame   = camCF
+end)
+
+-----------------------------------
+-- NOCLIP
+-----------------------------------
+local _prevNoclip = false
+RunService.Stepped:Connect(function()
+    local want = STATE.Noclip and STATE.Master
+    if want then
+        local char = LocalPlayer.Character
+        if char then
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                end
+            end
+        end
+    elseif _prevNoclip then
+        -- restore collision once on toggle-off
+        local char = LocalPlayer.Character
+        if char then
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    pcall(function() part.CanCollide = true end)
+                end
+            end
+        end
+    end
+    _prevNoclip = want
+end)
+
+-----------------------------------
+-- GUI (RAYFIELD)
+-----------------------------------
+
+dbg("GUI", "fetching Rayfield library via HTTP")
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+dbg("GUI", "Rayfield library initialized")
+
+local function sendNotification(title, content, duration)
+    pcall(function()
+        Rayfield:Notify({ Title = title, Content = content, Duration = duration or 5 })
+    end)
+end
+
+dbg("GUI", "creating window")
+local Window = Rayfield:CreateWindow({
+    Name = "Rivals RageByte",
+    Icon = 0,
+    LoadingTitle = "Rivals RageByte",
+    LoadingSubtitle = "Loading...",
+    Theme = "Default",
+    ToggleUIKeybind = "K",
+    DisableRayfieldPrompts = true,
+    DisableBuildWarnings = true,
+    ConfigurationSaving = {
+        Enabled = true,
+        FolderName = "RivalsRage",
+        FileName = "Config",
+    },
+})
+dbg("GUI", "window created")
+
+-- ── COMBAT ────────────────────────────────────────────────────────────────────
+dbg("GUI", "creating tab: Combat")
+local tCombat = Window:CreateTab("Combat", "crosshair")
+tCombat:CreateSection("Master")
+tCombat:CreateToggle({ Name = "Enabled",    CurrentValue = STATE.Master,    Flag = "Master",    Callback = function(v) STATE.Master    = v; saveConfig() end })
+tCombat:CreateToggle({ Name = "Team Check", CurrentValue = STATE.TeamCheck, Flag = "TeamCheck", Callback = function(v) STATE.TeamCheck = v; saveConfig() end })
+
+tCombat:CreateSection("Silent Aim")
+tCombat:CreateToggle({ Name = "Silent Aim", CurrentValue = STATE.SilentAim, Flag = "SilentAim", Callback = function(v) STATE.SilentAim = v; saveConfig() end })
+tCombat:CreateDropdown({ Name = "Silent Aim Mode", Options = {"Regular","Desync"}, CurrentOption = {STATE.SilentAimMode}, MultipleOptions = false, Flag = "SilentAimMode",
+    Callback = function(opts) STATE.SilentAimMode = opts[1] or "Regular"; saveConfig() end })
+
+tCombat:CreateSection("Aimbot")
+tCombat:CreateToggle({ Name = "Aimbot", CurrentValue = STATE.Aimbot, Flag = "Aimbot", Callback = function(v) STATE.Aimbot = v; saveConfig() end })
+tCombat:CreateDropdown({ Name = "Aim Key", Options = AIM_KEYBIND_OPTIONS, CurrentOption = {STATE.AimKeyName}, MultipleOptions = false, Flag = "AimKeyName",
+    Callback = function(opts)
+        local val = opts[1] or "RMB"; STATE.AimKeyName = val; STATE.AimKey = AIM_KEYBIND_MAP[val]; saveConfig()
+    end })
+tCombat:CreateDropdown({ Name = "Aim Mode", Options = {"Hold","Toggle"}, CurrentOption = {STATE.AimMode}, MultipleOptions = false, Flag = "AimMode",
+    Callback = function(opts) STATE.AimMode = opts[1] or "Hold"; saveConfig() end })
+tCombat:CreateSlider({ Name = "Smoothness", Range = {1,20},  Increment = 1,  CurrentValue = STATE.AimSmoothness, Flag = "AimSmoothness",
+    Callback = function(v) STATE.AimSmoothness = v; saveConfig() end })
+tCombat:CreateSlider({ Name = "FOV",        Range = {50,600}, Increment = 1, CurrentValue = STATE.AimFOV,        Flag = "AimFOV",
+    Callback = function(v) STATE.AimFOV        = v; saveConfig() end })
+
+tCombat:CreateSection("Aimbot Filters")
+tCombat:CreateToggle({ Name = "Visible Only", CurrentValue = STATE.AimVisibleOnly, Flag = "AimVisibleOnly", Callback = function(v) STATE.AimVisibleOnly = v; saveConfig() end })
+tCombat:CreateToggle({ Name = "Humanize",     CurrentValue = STATE.AimHumanize,   Flag = "AimHumanize",   Callback = function(v) STATE.AimHumanize   = v; saveConfig() end })
+tCombat:CreateSlider({ Name = "Max Distance", Range = {0,2000}, Increment = 10, CurrentValue = STATE.AimMaxDistance, Flag = "AimMaxDistance",
+    Callback = function(v) STATE.AimMaxDistance = v; saveConfig() end })
+
+tCombat:CreateSection("Triggerbot")
+tCombat:CreateToggle({ Name = "Triggerbot", CurrentValue = STATE.Triggerbot, Flag = "Triggerbot", Callback = function(v) STATE.Triggerbot = v; saveConfig() end })
+tCombat:CreateSlider({ Name = "Delay (ms)", Range = {0,500}, Increment = 1, CurrentValue = STATE.TriggerbotDelay, Flag = "TriggerbotDelay",
+    Callback = function(v) STATE.TriggerbotDelay = v; saveConfig() end })
+
+-- ── WEAPONS ───────────────────────────────────────────────────────────────────
+dbg("GUI", "creating tab: Weapons")
+local tWeapons = Window:CreateTab("Weapons", "sword")
+tWeapons:CreateSection("Modifications")
+tWeapons:CreateToggle({ Name = "Fast Fire",  CurrentValue = STATE.FastWeaps, Flag = "FastWeaps", Callback = function(v) STATE.FastWeaps = v; saveConfig() end })
+tWeapons:CreateToggle({ Name = "No Recoil",  CurrentValue = STATE.NoRecoil,  Flag = "NoRecoil",  Callback = function(v) STATE.NoRecoil  = v; saveConfig() end })
+tWeapons:CreateToggle({ Name = "Auto Click", CurrentValue = STATE.AutoClick, Flag = "AutoClick", Callback = function(v) STATE.AutoClick = v; saveConfig() end })
+
+-- ── VISUALS ───────────────────────────────────────────────────────────────────
+dbg("GUI", "creating tab: Visuals")
+local tVisuals = Window:CreateTab("Visuals", "eye")
+tVisuals:CreateSection("ESP")
+tVisuals:CreateToggle({ Name = "ESP Enabled", CurrentValue = STATE.ESP, Flag = "ESP", Callback = function(v) STATE.ESP = v; saveConfig() end })
+tVisuals:CreateSlider({ Name = "Max Range", Range = {50,500}, Increment = 10, CurrentValue = STATE.ESPMaxDistance, Flag = "ESPMaxDistance",
+    Callback = function(v) STATE.ESPMaxDistance = v; saveConfig() end })
+tVisuals:CreateColorPicker({ Name = "ESP Color", Color = Color3.fromRGB(STATE.ESPColorR, STATE.ESPColorG, STATE.ESPColorB), Flag = "ESPColor",
+    Callback = function(c) STATE.ESPColorR = math.floor(c.R*255); STATE.ESPColorG = math.floor(c.G*255); STATE.ESPColorB = math.floor(c.B*255); saveConfig() end })
+tVisuals:CreateToggle({ Name = "Boxes",       CurrentValue = STATE.ESPBox,       Flag = "ESPBox",       Callback = function(v) STATE.ESPBox       = v; saveConfig() end })
+tVisuals:CreateToggle({ Name = "Box Fill",    CurrentValue = STATE.ESPBoxFill,   Flag = "ESPBoxFill",   Callback = function(v) STATE.ESPBoxFill   = v; saveConfig() end })
+tVisuals:CreateToggle({ Name = "Tracers",     CurrentValue = STATE.ESPTracer,    Flag = "ESPTracer",    Callback = function(v) STATE.ESPTracer    = v; saveConfig() end })
+tVisuals:CreateToggle({ Name = "Names",       CurrentValue = STATE.ESPName,      Flag = "ESPName",      Callback = function(v) STATE.ESPName      = v; saveConfig() end })
+tVisuals:CreateToggle({ Name = "Distance",    CurrentValue = STATE.ESPDistance,  Flag = "ESPDistance",  Callback = function(v) STATE.ESPDistance  = v; saveConfig() end })
+tVisuals:CreateToggle({ Name = "Health Bars", CurrentValue = STATE.ESPHealthBar, Flag = "ESPHealthBar", Callback = function(v) STATE.ESPHealthBar = v; saveConfig() end })
+tVisuals:CreateToggle({ Name = "Skeleton",    CurrentValue = STATE.ESPSkeleton,  Flag = "ESPSkeleton",  Callback = function(v) STATE.ESPSkeleton  = v; saveConfig() end })
+
+tVisuals:CreateSection("Camera")
+tVisuals:CreateToggle({ Name = "Camera FOV", CurrentValue = STATE.CameraFOVEnabled, Flag = "CameraFOVEnabled", Callback = function(v) STATE.CameraFOVEnabled = v; saveConfig() end })
+tVisuals:CreateSlider({ Name = "FOV Scale (lower = wider)", Range = {1, 100}, Increment = 1, CurrentValue = math.floor(STATE.CameraFOVScale * 100), Flag = "CameraFOVScale",
+    Callback = function(v) STATE.CameraFOVScale = v / 100; saveConfig() end })
+
+tVisuals:CreateSection("Chams")
+tVisuals:CreateToggle({ Name = "Chams ESP", CurrentValue = STATE.ChamsESP, Flag = "ChamsESP", Callback = function(v) STATE.ChamsESP = v; saveConfig() end })
+tVisuals:CreateColorPicker({ Name = "Chams Color", Color = Color3.fromRGB(STATE.ChamsR, STATE.ChamsG, STATE.ChamsB), Flag = "ChamsColor",
+    Callback = function(c) STATE.ChamsR = math.floor(c.R*255); STATE.ChamsG = math.floor(c.G*255); STATE.ChamsB = math.floor(c.B*255); saveConfig() end })
+
+tVisuals:CreateSection("Bullet Effects")
+tVisuals:CreateToggle({ Name = "Bullet Tracers", CurrentValue = STATE.BulletTracers, Flag = "BulletTracers", Callback = function(v) STATE.BulletTracers = v; saveConfig() end })
+tVisuals:CreateColorPicker({ Name = "Tracer Color", Color = Color3.fromRGB(STATE.TracerR, STATE.TracerG, STATE.TracerB), Flag = "TracerColor",
+    Callback = function(c) STATE.TracerR = math.floor(c.R*255); STATE.TracerG = math.floor(c.G*255); STATE.TracerB = math.floor(c.B*255); saveConfig() end })
+tVisuals:CreateToggle({ Name = "Impact Markers", CurrentValue = STATE.ImpactMarkers, Flag = "ImpactMarkers", Callback = function(v) STATE.ImpactMarkers = v; saveConfig() end })
+tVisuals:CreateColorPicker({ Name = "Impact Color", Color = Color3.fromRGB(STATE.ImpactR, STATE.ImpactG, STATE.ImpactB), Flag = "ImpactColor",
+    Callback = function(c) STATE.ImpactR = math.floor(c.R*255); STATE.ImpactG = math.floor(c.G*255); STATE.ImpactB = math.floor(c.B*255); saveConfig() end })
+
+tVisuals:CreateSection("Aim Trajectory")
+tVisuals:CreateToggle({ Name = "Aim Trajectory", CurrentValue = STATE.AimTrajectory, Flag = "AimTrajectory", Callback = function(v) STATE.AimTrajectory = v; saveConfig() end })
+tVisuals:CreateColorPicker({ Name = "Trail Color", Color = Color3.fromRGB(STATE.AimTrajR, STATE.AimTrajG, STATE.AimTrajB), Flag = "AimTrajColor",
+    Callback = function(c) STATE.AimTrajR = math.floor(c.R*255); STATE.AimTrajG = math.floor(c.G*255); STATE.AimTrajB = math.floor(c.B*255); saveConfig() end })
+
+tVisuals:CreateSection("Rainbow")
+tVisuals:CreateToggle({ Name = "Rainbow Visuals", CurrentValue = STATE.RainbowVisuals, Flag = "RainbowVisuals", Callback = function(v) STATE.RainbowVisuals = v; saveConfig() end })
+
+tVisuals:CreateSection("Crosshair")
+tVisuals:CreateToggle({ Name = "Spinning Crosshair", CurrentValue = STATE.SpinCrosshair, Flag = "SpinCrosshair", Callback = function(v) STATE.SpinCrosshair = v; saveConfig() end })
+
+tVisuals:CreateSection("Target Line")
+tVisuals:CreateToggle({ Name = "Target Line", CurrentValue = STATE.TargetLine, Flag = "TargetLine", Callback = function(v) STATE.TargetLine = v; saveConfig() end })
+
+-- ── MOVEMENT ──────────────────────────────────────────────────────────────────
+dbg("GUI", "creating tab: Movement")
+local tMovement = Window:CreateTab("Movement", "zap")
+tMovement:CreateSection("Speed")
+tMovement:CreateToggle({ Name = "Walk Speed", CurrentValue = STATE.WalkSpeedEnabled, Flag = "WalkSpeedEnabled", Callback = function(v) STATE.WalkSpeedEnabled = v; saveConfig() end })
+tMovement:CreateSlider({ Name = "Speed", Range = {16,200}, Increment = 1, CurrentValue = STATE.WalkSpeed, Flag = "WalkSpeed",
+    Callback = function(v) STATE.WalkSpeed = v; saveConfig() end })
+
+tMovement:CreateSection("Jump")
+tMovement:CreateToggle({ Name = "Jump Power",   CurrentValue = STATE.JumpPowerEnabled, Flag = "JumpPowerEnabled", Callback = function(v) STATE.JumpPowerEnabled = v; saveConfig() end })
+tMovement:CreateSlider({ Name = "Power", Range = {50,300}, Increment = 1, CurrentValue = STATE.JumpPower, Flag = "JumpPower",
+    Callback = function(v) STATE.JumpPower = v; saveConfig() end })
+tMovement:CreateToggle({ Name = "Infinite Jump", CurrentValue = STATE.InfJump, Flag = "InfJump", Callback = function(v) STATE.InfJump = v; saveConfig() end })
+
+tMovement:CreateSection("Fly")
+tMovement:CreateToggle({ Name = "Fly [WASD + Space/Shift]", CurrentValue = STATE.Fly, Flag = "Fly", Callback = function(v) STATE.Fly = v; saveConfig() end })
+
+tMovement:CreateSection("Noclip")
+tMovement:CreateToggle({ Name = "Noclip", CurrentValue = STATE.Noclip, Flag = "Noclip", Callback = function(v) STATE.Noclip = v; saveConfig() end })
+
+tMovement:CreateSection("Teleport")
+tMovement:CreateToggle({ Name = "TP to Cursor [T]", CurrentValue = STATE.TPToCursor, Flag = "TPToCursor", Callback = function(v) STATE.TPToCursor = v; saveConfig() end })
+tMovement:CreateToggle({ Name = "TP to Players",    CurrentValue = STATE.Teleport,   Flag = "Teleport",   Callback = function(v) STATE.Teleport   = v; saveConfig() end })
+
+-- ── WORLD ─────────────────────────────────────────────────────────────────────
+dbg("GUI", "creating tab: World")
+local tWorld = Window:CreateTab("World", "sun")
+tWorld:CreateSection("Lighting")
+tWorld:CreateToggle({ Name = "Map Visuals", CurrentValue = STATE.MapVisuals, Flag = "MapVisuals", Callback = function(v) STATE.MapVisuals = v; saveConfig() end })
+tWorld:CreateDropdown({ Name = "Preset", Options = {"Arctic Night","Blood Moon","Neon Void","Toxic Wasteland","Heaven","Inferno","Deep Space","Matrix"}, CurrentOption = {STATE.MapVisualsPreset}, MultipleOptions = false, Flag = "MapVisualsPreset",
+    Callback = function(opts) STATE.MapVisualsPreset = opts[1] or "Arctic Night"; saveConfig() end })
+
+-- ── MISC ──────────────────────────────────────────────────────────────────────
+dbg("GUI", "creating tab: Misc")
+local tMisc = Window:CreateTab("Misc", "settings")
+tMisc:CreateSection("Security")
+tMisc:CreateToggle({ Name = "AC Bypass", CurrentValue = STATE.AntiCheatBypass, Flag = "AntiCheatBypass", Callback = function(v) STATE.AntiCheatBypass = v; saveConfig() end })
+
+tMisc:CreateSection("Cosmetics")
+tMisc:CreateToggle({ Name = "Unlock All Skins", CurrentValue = STATE.UnlockSkins, Flag = "UnlockSkins", Callback = function(v) STATE.UnlockSkins = v; saveConfig() end })
+
+tMisc:CreateSection("Codes")
+tMisc:CreateButton({ Name = "Redeem All Codes", Callback = function()
+    task.spawn(function()
+        local ok, rem = pcall(function() return ReplicatedStorage.Remotes.Data.RedeemCode end)
+        if not ok or not rem then sendNotification("Codes", "Redeem remote not found.", 4); return end
+        local codes = { "COMMUNITY23","FREE181","BONUS","BOOST","ROBLOX_RTC" }
+        for _, code in ipairs(codes) do pcall(function() rem:InvokeServer(string.lower(code)) end); task.wait(0.5) end
+        sendNotification("Codes", "All codes redeemed!", 4)
+    end)
+end })
+
+tMisc:CreateSection("Danger Zone")
+tMisc:CreateButton({ Name = "DESTROY SCRIPT", Callback = function()
+    STATE.Master=false; STATE.Aimbot=false; STATE.AimActive=false; STATE.SilentAim=false
+    STATE.Triggerbot=false; STATE.AutoClick=false; STATE.ESP=false; STATE.FastWeaps=false
+    STATE.WalkSpeedEnabled=false; STATE.JumpPowerEnabled=false; STATE.InfJump=false
+    STATE.NoRecoil=false; STATE.AntiCheatBypass=false; STATE.UnlockSkins=false
+    STATE.ChamsESP=false; STATE.AimTrajectory=false; STATE.SpinCrosshair=false
+    STATE.MapVisuals=false; STATE.Fly=false; STATE.Noclip=false
+    for _, ln in ipairs(TRAJ_LINE_POOL) do pcall(function() ln.Visible = false end) end
+    teardownSpinCrosshair()
     if type(ItemLibrary) == "table" then
         for name, data in pairs(ItemLibrary) do
             local orig = OriginalItemData[name]
-            if orig then
-                for k, v in pairs(orig) do data[k] = v end
-            end
+            if orig then for k, v in pairs(orig) do data[k] = v end end
         end
     end
-
-    -- Restore humanoid stats
     if LocalPlayer.Character then
         local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum.WalkSpeed = origHumStats.WalkSpeed
-            hum.JumpPower = origHumStats.JumpPower
+        if hum then hum.WalkSpeed = origHumStats.WalkSpeed; hum.JumpPower = origHumStats.JumpPower end
+        for _, part in ipairs(LocalPlayer.Character:GetDescendants()) do
+            if part:IsA("BasePart") then pcall(function() part.CanCollide = true end) end
         end
     end
+    if isHoldingClick then pcall(mouse1release); isHoldingClick = false end
+    if FOVCircle then pcall(function() FOVCircle:Remove() end) end
+    if TargetLineDrawing then pcall(function() TargetLineDrawing:Remove() end) end
+    do local r={}; for p in pairs(ESP_OBJECTS) do r[#r+1]=p end; for _,p in ipairs(r) do removeESP(p) end end
+    do local r={}; for p in pairs(CHAMS_OBJECTS) do r[#r+1]=p end; for _,p in ipairs(r) do cleanupChamsForPlayer(p) end end
+    pcall(function() if customEnv and customEnv.SilentAim then customEnv.SilentAim:Shutdown() end end)
+    pcall(function() Rayfield:Destroy() end)
+    pcall(function() if _mobileAimGui then _mobileAimGui:Destroy() end end)
+end })
 
-    -- Release held mouse button
-    if isHoldingClick then
-        pcall(mouse1release)
-        isHoldingClick = false
-    end
-
-    -- Remove FOV circle
-    if FOVCircle then
-        pcall(function() FOVCircle:Remove() end)
-    end
-
-    -- Remove all ESP drawings safely
-    do
-        local toRemove = {}
-        for player in pairs(ESP_OBJECTS) do toRemove[#toRemove + 1] = player end
-        for _, player in ipairs(toRemove) do removeESP(player) end
-    end
-
-    -- Shut down silent aim
-    pcall(function()
-        if customEnv and customEnv.SilentAim then
-            customEnv.SilentAim:Shutdown()
-        end
-    end)
-
-    -- Destroy the entire GUI (mobileAimBtn is a child so it goes too)
-    pcall(function() screenGui:Destroy() end)
-end)
-
-selectTab(1)
+dbg("GUI", "calling LoadConfiguration (triggers all element callbacks)")
+Rayfield:LoadConfiguration()
+dbg("GUI", "LoadConfiguration complete")
 
 -----------------------------------
 -- MOBILE AIM BUTTON
 -----------------------------------
-local mobileAimBtn = Instance.new("Frame", screenGui)
+local TweenService = game:GetService("TweenService")
+local TWEEN_INFO   = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local _mobileAimGui = Instance.new("ScreenGui")
+_mobileAimGui.Name = "_RR_MobileAim"
+_mobileAimGui.ResetOnSpawn = false
+_mobileAimGui.IgnoreGuiInset = true
+do
+    local ok = pcall(function() _mobileAimGui.Parent = game:GetService("CoreGui") end)
+    if not ok then _mobileAimGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+end
+
+local mobileAimBtn = Instance.new("Frame", _mobileAimGui)
 mobileAimBtn.Name = "MobileAimBtn"
 mobileAimBtn.Size = UDim2.new(0, 72, 0, 72)
 mobileAimBtn.Position = UDim2.new(1, -100, 1, -180)
-mobileAimBtn.BackgroundColor3 = UI_ACCENT
+mobileAimBtn.BackgroundColor3 = Color3.fromRGB(85, 170, 255)
 mobileAimBtn.BackgroundTransparency = 0.25
 mobileAimBtn.Visible = false
 mobileAimBtn.ZIndex = 5
@@ -1498,11 +1566,10 @@ do
     mabLabel.BackgroundTransparency = 1
     mabLabel.Text = "AIM"
     mabLabel.TextColor3 = Color3.new(1, 1, 1)
-    mabLabel.Font = FONT_BOLD
+    mabLabel.Font = Enum.Font.GothamBold
     mabLabel.TextSize = 16
     mabLabel.ZIndex = 5
 
-    -- Invisible hit-test button layered over the frame
     local mabBtn = Instance.new("TextButton", mobileAimBtn)
     mabBtn.Size = UDim2.new(1, 0, 1, 0)
     mabBtn.BackgroundTransparency = 1
@@ -1550,7 +1617,6 @@ do
         if input.UserInputType ~= Enum.UserInputType.Touch
            and input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
         if mbDragDist <= DRAG_THRESH then
-            -- Tap: toggle or release hold
             if STATE.AimMode == "Toggle" then
                 STATE.AimActive = not STATE.AimActive
                 TweenService:Create(mobileAimBtn, TWEEN_INFO, {
@@ -1561,7 +1627,6 @@ do
                 TweenService:Create(mobileAimBtn, TWEEN_INFO, {BackgroundTransparency = 0.25}):Play()
             end
         else
-            -- Drag released: ensure aim is off
             STATE.AimActive = false
             TweenService:Create(mobileAimBtn, TWEEN_INFO, {BackgroundTransparency = 0.25}):Play()
         end
@@ -1581,67 +1646,577 @@ end)
 -----------------------------------
 local customEnv = getgenv and getgenv() or _G
 if customEnv.SilentAim then customEnv.SilentAim:Shutdown() end
-customEnv.SilentAim = { Active = false, Desync = false }
+customEnv.SilentAim = { Active = false }
 
-local GunModule = pcall(function() return require(LocalPlayer.PlayerScripts.Modules.ItemTypes.Gun) end) and require(LocalPlayer.PlayerScripts.Modules.ItemTypes.Gun) or nil
-local UtilityModule = pcall(function() return require(ReplicatedStorage.Modules.Utility) end) and require(ReplicatedStorage.Modules.Utility) or nil
+local GunModule, UtilityModule
+-- requires are loaded async after 0.5s to avoid blocking the main thread
+
+-- Desync object (fixed, OOP)
+local _ds = {}
+do
+    _ds.__active     = false
+    _ds.__target     = nil
+    _ds.__desync     = false
+    _ds.__conn1      = nil
+    _ds.__conn2      = nil
+    _ds.__task1      = nil
+    _ds.__curr       = nil
+    _ds.__lastTarget = nil
+
+    local _dsRoot = setmetatable({}, {
+        __index = function(_, key)
+            local char = LocalPlayer.Character
+            if not char then return nil end
+            if key == "__root" then return char:FindFirstChild("HumanoidRootPart")
+            elseif key == "__head" then return char:FindFirstChild("Head") end
+            return nil
+        end
+    })
+
+    function _ds:__find()
+        local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+        local closest, closestDist = nil, math.huge
+        local localChar = LocalPlayer.Character
+        local localRoot = localChar and localChar:FindFirstChild("HumanoidRootPart")
+        for _, player in next, Players:GetPlayers() do
+            if player == LocalPlayer then continue end
+            if STATE.TeamCheck and player:GetAttribute("TeamID") == LocalPlayer:GetAttribute("TeamID") then continue end
+            local char = player.Character
+            if not char then continue end
+            local head = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+            local hum  = char:FindFirstChildWhichIsA("Humanoid")
+            if not (head and hum and hum.Health > 0) then continue end
+            -- max range check (300 studs)
+            if localRoot then
+                local root = char:FindFirstChild("HumanoidRootPart")
+                if root and (root.Position - localRoot.Position).Magnitude > 300 then continue end
+            end
+            local screenPos, _, depth = worldToScreen(head.Position)
+            if depth <= 0 then continue end  -- behind camera only
+            local dist = (screenPos - center).Magnitude
+            if dist < closestDist then closestDist = dist; closest = player end
+        end
+        return closest
+    end
+
+    function _ds:__desync_start(target)
+        if not target or not target.Character then return end
+        local tHum = target.Character:FindFirstChild("Humanoid")
+        if not tHum or tHum.Health <= 0 then return end
+        if self.__conn2 then self.__conn2:Disconnect() end
+        self.__desync = true
+        self.__curr   = target
+
+        self.__conn2 = RunService.Heartbeat:Connect(function()
+            if not self.__desync then return end
+            if not self.__curr or not self.__curr.Character then
+                self:__desync_stop(); return
+            end
+            local tHumCheck = self.__curr.Character:FindFirstChild("Humanoid")
+            if not tHumCheck or tHumCheck.Health <= 0 then
+                self:__desync_stop(); return
+            end
+            local rootPart = _dsRoot.__root
+            if not rootPart then return end
+            local tgtRoot = self.__curr.Character:FindFirstChild("HumanoidRootPart")
+            if not tgtRoot then self:__desync_stop(); return end
+
+            local savedCF  = rootPart.CFrame
+            local savedVel = rootPart.Velocity
+            local savedRot = rootPart.RotVelocity
+            rootPart.CFrame = tgtRoot.CFrame * CFrame.new(0, -5, 0)
+
+            RunService:BindToRenderStep("__RR_restore", 101, function()
+                if rootPart and rootPart.Parent then
+                    rootPart.CFrame      = savedCF
+                    rootPart.Velocity    = savedVel
+                    rootPart.RotVelocity = savedRot
+                end
+                RunService:UnbindFromRenderStep("__RR_restore")
+            end)
+        end)
+    end
+
+    function _ds:__desync_stop()
+        self.__desync = false
+        pcall(function() RunService:UnbindFromRenderStep("__RR_restore") end)
+        if self.__conn2 then self.__conn2:Disconnect(); self.__conn2 = nil end
+        self.__curr = nil
+    end
+
+    function _ds:__startHeartbeat()
+        if self.__conn1 then self.__conn1:Disconnect() end
+        self.__conn1 = RunService.Heartbeat:Connect(function()
+            if not self.__active then return end
+            local newTarget = self:__find()
+            -- If target died while desync active, stop immediately
+            if self.__desync and self.__target then
+                local alive = self.__target.Character
+                    and self.__target.Character:FindFirstChild("Humanoid")
+                    and self.__target.Character.Humanoid.Health > 0
+                if not alive then
+                    self:__desync_stop()
+                    self.__target = nil
+                end
+            end
+            -- Don't switch targets while desync is running
+            if not self.__desync then
+                self.__target = newTarget
+            end
+        end)
+    end
+
+    function _ds:enable()
+        if self.__active then return end
+        self.__active = true
+        self:__startHeartbeat()
+    end
+
+    function _ds:disable()
+        self.__active = false
+        self:__desync_stop()
+        pcall(function() RunService:UnbindFromRenderStep("__RR_restore") end)
+        if self.__conn1 then self.__conn1:Disconnect(); self.__conn1 = nil end
+        if self.__task1 then task.cancel(self.__task1); self.__task1 = nil end
+        self.__target = nil
+    end
+
+    function _ds:shoot(packetArgs, tgt)
+        local head = tgt.Character and tgt.Character:FindFirstChild("Head")
+        if not head then return end
+        local tHum = tgt.Character:FindFirstChild("Humanoid")
+        if not tHum or tHum.Health <= 0 then self:__desync_stop(); return end
+
+        if not self.__desync or self.__curr ~= tgt then
+            self:__desync_start(tgt)
+            task.wait(0.1)
+        end
+
+        if self.__task1 then task.cancel(self.__task1); self.__task1 = nil end
+
+        -- Re-validate after wait
+        if not tgt.Character then self:__desync_stop(); return end
+        tHum = tgt.Character:FindFirstChild("Humanoid")
+        if not tHum or tHum.Health <= 0 then self:__desync_stop(); return end
+        head = tgt.Character:FindFirstChild("Head")
+        if not head then return end
+
+        local targetPos    = head.Position
+        local targetCFrame = head.CFrame
+        local shotOrigin   = targetPos - Vector3.new(0, 5, 0)
+        local lookDir      = CFrame.lookAt(shotOrigin, targetPos)
+        local noise        = Vector3.new(math.random(), math.random(), math.random())
+        local localHitCF   = targetCFrame:ToObjectSpace(CFrame.new(targetPos + noise))
+        local encode       = type(UtilityModule) == "table" and UtilityModule.EncodeCFrame
+
+        packetArgs[utf8.char(0)] = encode and UtilityModule:EncodeCFrame(CFrame.new(shotOrigin, targetPos) * CFrame.Angles(lookDir:ToOrientation())) or CFrame.new(shotOrigin, targetPos)
+        packetArgs[utf8.char(1)] = encode and UtilityModule:EncodeCFrame(CFrame.new(targetPos) * CFrame.Angles(lookDir:ToOrientation())) or CFrame.new(targetPos)
+        packetArgs[utf8.char(2)] = head
+        packetArgs[utf8.char(3)] = encode and UtilityModule:EncodeCFrame(localHitCF) or localHitCF
+
+        self.__task1 = task.delay(0.15, function() self:__desync_stop() end)
+    end
+end
 
 customEnv.SilentAim.Shutdown = function(self)
     self.Active = false
-    if self.Connection1 then self.Connection1:Disconnect() end
-    if self.Connection2 then self.Connection2:Disconnect() end
-    if self.Task then task.cancel(self.Task) end
+    _ds:disable()
+    if self.Connection1 then self.Connection1:Disconnect(); self.Connection1 = nil end
     if self.OriginalShoot and type(GunModule) == "table" then GunModule.StartShooting = self.OriginalShoot end
 end
 
 customEnv.SilentAim.Connection1 = RunService.Heartbeat:Connect(function()
-    if STATE.SilentAim and STATE.Master then customEnv.SilentAim.Target = getSilentAimTarget() end
+    if STATE.SilentAim and STATE.Master then
+        if STATE.SilentAimMode == "Desync" then
+            _ds:enable()
+            customEnv.SilentAim.Target = _ds.__target
+        else
+            _ds:disable()
+            customEnv.SilentAim.Target = getSilentAimTarget()
+        end
+    else
+        _ds:disable()
+        customEnv.SilentAim.Target = nil
+    end
 end)
 
-if type(GunModule) == "table" and GunModule.StartShooting then
-    customEnv.SilentAim.OriginalShoot = GunModule.StartShooting
-    GunModule.StartShooting = function(self, ...)
-        local args = { customEnv.SilentAim.OriginalShoot(self, ...) }
-        if not self.ClientFighter or not self.ClientFighter.IsLocalPlayer or type(args[3]) ~= "table" or not STATE.SilentAim or not STATE.Master or not customEnv.SilentAim.Target or not customEnv.SilentAim.Target.Character then
+-- Load modules and hook StartShooting after 0.5s so they don't block the main thread
+task.delay(0.5, function()
+    dbg("SA", "requiring Gun module (async)")
+    do local ok, m = pcall(function() return require(LocalPlayer.PlayerScripts.Modules.ItemTypes.Gun) end); if ok and type(m) == "table" then GunModule = m end end
+    dbg("SA", "Gun done type=" .. type(GunModule))
+    dbg("SA", "requiring Utility module (async)")
+    do local ok, m = pcall(function() return require(ReplicatedStorage.Modules.Utility) end); if ok and type(m) == "table" then UtilityModule = m end end
+    dbg("SA", "Utility done type=" .. type(UtilityModule))
+    if type(GunModule) == "table" and GunModule.StartShooting then
+        dbg("SA", "hooking GunModule.StartShooting")
+        customEnv.SilentAim.OriginalShoot = GunModule.StartShooting
+        GunModule.StartShooting = function(self, ...)
+            local args = { customEnv.SilentAim.OriginalShoot(self, ...) }
+            if not self.ClientFighter or not self.ClientFighter.IsLocalPlayer
+               or type(args[3]) ~= "table"
+               or not STATE.SilentAim or not STATE.Master
+               or not customEnv.SilentAim.Target
+               or not customEnv.SilentAim.Target.Character then
+                return unpack(args)
+            end
+            args[4] = true
+            local tgt  = customEnv.SilentAim.Target
+            local head = tgt.Character:FindFirstChild("Head")
+            if not head then return unpack(args) end
+
+            local targetPos    = head.Position
+            local targetCFrame = head.CFrame
+            local encode       = type(UtilityModule) == "table" and UtilityModule.EncodeCFrame
+
+            if STATE.SilentAimMode == "Desync" then
+                local tHum = tgt.Character:FindFirstChild("Humanoid")
+                if not tHum or tHum.Health <= 0 then
+                    _ds:__desync_stop()
+                    return unpack(args)
+                end
+                _ds:shoot(args[3], tgt)
+            else
+                -- Regular mode: real HRP origin, wallbang, no desync
+                local myChar     = LocalPlayer.Character
+                local myRoot     = myChar and myChar:FindFirstChild("HumanoidRootPart")
+                local shotOrigin = myRoot and myRoot.Position or (targetPos - Vector3.new(0, 5, 0))
+                local lookDir    = CFrame.lookAt(shotOrigin, targetPos)
+                local rx, ry, rz = lookDir:ToOrientation()
+                local originCF   = CFrame.new(shotOrigin, targetPos) * CFrame.Angles(rx, ry, rz)
+                local impactCF   = CFrame.new(targetPos)             * CFrame.Angles(rx, ry, rz)
+                local noise      = Vector3.new(math.random(), math.random(), math.random())
+                local localHitCF = targetCFrame:ToObjectSpace(CFrame.new(targetPos + noise))
+
+                args[3][utf8.char(0)] = encode and UtilityModule:EncodeCFrame(originCF)   or originCF
+                args[3][utf8.char(1)] = encode and UtilityModule:EncodeCFrame(impactCF)   or impactCF
+                args[3][utf8.char(2)] = head
+                args[3][utf8.char(3)] = encode and UtilityModule:EncodeCFrame(localHitCF) or localHitCF
+            end
+
             return unpack(args)
         end
-        args[4] = true
-        local tgt = customEnv.SilentAim.Target
-        if not customEnv.SilentAim.Desync or customEnv.SilentAim.CurrentTarget ~= tgt then
-            if customEnv.SilentAim.Connection2 then customEnv.SilentAim.Connection2:Disconnect() end
-            customEnv.SilentAim.Desync = true
-            customEnv.SilentAim.CurrentTarget = tgt
-            customEnv.SilentAim.Connection2 = RunService.Heartbeat:Connect(function()
-                if not customEnv.SilentAim.Desync then return end
-                local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                local tgtRoot = tgt.Character and tgt.Character:FindFirstChild("HumanoidRootPart")
-                if not myRoot or not tgtRoot then customEnv.SilentAim.Desync = false return end
-                local oldCFrame, oldVel, oldRot = myRoot.CFrame, myRoot.Velocity, myRoot.RotVelocity
-                myRoot.CFrame = tgtRoot.CFrame * CFrame.new(0, -5, 0)
-                RunService:BindToRenderStep("RestorePosition", 101, function()
-                    if myRoot then myRoot.CFrame, myRoot.Velocity, myRoot.RotVelocity = oldCFrame, oldVel, oldRot end
-                    RunService:UnbindFromRenderStep("RestorePosition")
-                end)
-            end)
-            task.wait(0.1)
-        end
-        if customEnv.SilentAim.Task then task.cancel(customEnv.SilentAim.Task) end
-        local head = tgt.Character:FindFirstChild("Head")
-        if not head then return unpack(args) end
-        local targetPos, targetCFrame = head.Position, head.CFrame
-        local startPos = targetPos - Vector3.new(0, 5, 0)
-        local lookCFrame = CFrame.lookAt(startPos, targetPos)
-        local encode = type(UtilityModule) == "table" and UtilityModule.EncodeCFrame
-        args[3][utf8.char(0)] = encode and UtilityModule:EncodeCFrame(CFrame.new(startPos, targetPos) * CFrame.Angles(lookCFrame:ToOrientation())) or CFrame.new(startPos, targetPos) * CFrame.Angles(lookCFrame:ToOrientation())
-        args[3][utf8.char(1)] = encode and UtilityModule:EncodeCFrame(CFrame.new(targetPos) * CFrame.Angles(lookCFrame:ToOrientation())) or CFrame.new(targetPos) * CFrame.Angles(lookCFrame:ToOrientation())
-        args[3][utf8.char(2)] = head
-        args[3][utf8.char(3)] = encode and UtilityModule:EncodeCFrame(targetCFrame:ToObjectSpace(CFrame.new(targetPos + Vector3.new(math.random(), math.random(), math.random())))) or targetCFrame:ToObjectSpace(CFrame.new(targetPos))
-        customEnv.SilentAim.Task = task.delay(0.15, function()
-            customEnv.SilentAim.Desync = false
-            if customEnv.SilentAim.Connection2 then customEnv.SilentAim.Connection2:Disconnect() customEnv.SilentAim.Connection2 = nil end
-        end)
-        return unpack(args)
     end
+end)
+
+-----------------------------------
+-- WORLD / MAP VISUALS
+-----------------------------------
+do
+    local LightingService = game:GetService("Lighting")
+
+    local _origLighting = {
+        ClockTime      = LightingService.ClockTime,
+        Brightness     = LightingService.Brightness,
+        Ambient        = LightingService.Ambient,
+        OutdoorAmbient = LightingService.OutdoorAmbient,
+        FogColor       = LightingService.FogColor,
+        FogStart       = LightingService.FogStart,
+        FogEnd         = LightingService.FogEnd,
+        Technology     = LightingService.Technology,
+    }
+    local _mapVisualsApplied = false
+
+    local _PRESET_LT_NAMES = {
+        "ArcticAtmosphere","ArcticCC","ArcticBloom",
+        "BloodAtmo","BloodCC","BloodBloom",
+        "NeonAtmo","NeonCC","NeonBloom",
+        "ToxicAtmo","ToxicCC",
+        "HeavenAtmo","HeavenCC","HeavenBloom",
+        "InfernoAtmo","InfernoCC","InfernoBloom",
+        "SpaceAtmo","SpaceCC",
+        "MatrixAtmo","MatrixCC",
+    }
+    local _PRESET_WS_NAMES = { "AuroraCeiling" }
+
+    local function _restoreMapVisuals()
+        if not _mapVisualsApplied then return end
+        _mapVisualsApplied = false
+        LightingService.ClockTime      = _origLighting.ClockTime
+        LightingService.Brightness     = _origLighting.Brightness
+        LightingService.Ambient        = _origLighting.Ambient
+        LightingService.OutdoorAmbient = _origLighting.OutdoorAmbient
+        LightingService.FogColor       = _origLighting.FogColor
+        LightingService.FogStart       = _origLighting.FogStart
+        LightingService.FogEnd         = _origLighting.FogEnd
+        LightingService.Technology     = _origLighting.Technology
+        for _, name in ipairs(_PRESET_LT_NAMES) do
+            local obj = LightingService:FindFirstChild(name)
+            if obj then obj:Destroy() end
+        end
+        for _, name in ipairs(_PRESET_WS_NAMES) do
+            local obj = Workspace:FindFirstChild(name)
+            if obj then obj:Destroy() end
+        end
+    end
+
+    local MAP_PRESETS = {}
+
+    MAP_PRESETS["Arctic Night"] = function()
+        for _, v in ipairs(LightingService:GetChildren()) do
+            if v:IsA("Atmosphere") or v:IsA("BloomEffect")
+            or v:IsA("ColorCorrectionEffect") or v:IsA("SunRaysEffect") then
+                pcall(function() v:Destroy() end)
+            end
+        end
+        local old = Workspace:FindFirstChild("AuroraCeiling")
+        if old then old:Destroy() end
+
+        local Aurora = Instance.new("Part")
+        Aurora.Name        = "AuroraCeiling"
+        Aurora.Anchored    = true
+        Aurora.CanCollide  = false
+        Aurora.Transparency = 1
+        Aurora.Size        = Vector3.new(2500, 1, 2500)
+        Aurora.Position    = Vector3.new(0, 600, 0)
+        Aurora.Parent      = Workspace
+        local Decal = Instance.new("Decal")
+        Decal.Face    = Enum.NormalId.Bottom
+        Decal.Texture = "rbxassetid://9798959206"
+        Decal.Parent  = Aurora
+
+        LightingService.Technology     = Enum.Technology.Future
+        LightingService.ClockTime      = 20.3
+        LightingService.Brightness     = 2.8
+        LightingService.Ambient        = Color3.fromRGB(85,  105, 140)
+        LightingService.OutdoorAmbient = Color3.fromRGB(120, 145, 185)
+        LightingService.FogStart       = 1500
+        LightingService.FogEnd         = 15000
+        LightingService.FogColor       = Color3.fromRGB(170, 195, 225)
+
+        local Atmo = Instance.new("Atmosphere")
+        Atmo.Name    = "ArcticAtmosphere"
+        Atmo.Density = 0.18
+        Atmo.Haze    = 0.8
+        Atmo.Glare   = 0.05
+        Atmo.Color   = Color3.fromRGB(200, 220, 255)
+        Atmo.Decay   = Color3.fromRGB(140, 180, 255)
+        Atmo.Parent  = LightingService
+
+        local CC = Instance.new("ColorCorrectionEffect")
+        CC.Name       = "ArcticCC"
+        CC.Brightness = 0.04
+        CC.Contrast   = 0.15
+        CC.Saturation = 0.05
+        CC.Parent     = LightingService
+
+        local Bloom = Instance.new("BloomEffect")
+        Bloom.Name      = "ArcticBloom"
+        Bloom.Intensity = 0.12
+        Bloom.Size      = 30
+        Bloom.Threshold = 1.8
+        Bloom.Parent    = LightingService
+    end
+
+    MAP_PRESETS["Blood Moon"] = function()
+        for _, v in ipairs(LightingService:GetChildren()) do
+            if v:IsA("Atmosphere") or v:IsA("BloomEffect")
+            or v:IsA("ColorCorrectionEffect") or v:IsA("SunRaysEffect") then
+                pcall(function() v:Destroy() end)
+            end
+        end
+        LightingService.Technology     = Enum.Technology.Future
+        LightingService.ClockTime      = 22.0
+        LightingService.Brightness     = 1.2
+        LightingService.Ambient        = Color3.fromRGB(90, 5, 5)
+        LightingService.OutdoorAmbient = Color3.fromRGB(130, 15, 15)
+        LightingService.FogColor       = Color3.fromRGB(50, 0, 0)
+        LightingService.FogStart       = 150
+        LightingService.FogEnd         = 900
+        local Atmo = Instance.new("Atmosphere")
+        Atmo.Name = "BloodAtmo"; Atmo.Density = 0.4; Atmo.Haze = 3
+        Atmo.Glare = 0.02; Atmo.Color = Color3.fromRGB(180, 20, 20)
+        Atmo.Decay = Color3.fromRGB(80, 0, 0); Atmo.Parent = LightingService
+        local CC = Instance.new("ColorCorrectionEffect")
+        CC.Name = "BloodCC"; CC.Brightness = -0.08; CC.Contrast = 0.4
+        CC.Saturation = 0.6; CC.TintColor = Color3.fromRGB(255, 90, 90)
+        CC.Parent = LightingService
+        local Bloom = Instance.new("BloomEffect")
+        Bloom.Name = "BloodBloom"; Bloom.Intensity = 1.2; Bloom.Size = 50; Bloom.Threshold = 0.7
+        Bloom.Parent = LightingService
+    end
+
+    MAP_PRESETS["Neon Void"] = function()
+        for _, v in ipairs(LightingService:GetChildren()) do
+            if v:IsA("Atmosphere") or v:IsA("BloomEffect")
+            or v:IsA("ColorCorrectionEffect") or v:IsA("SunRaysEffect") then
+                pcall(function() v:Destroy() end)
+            end
+        end
+        LightingService.Technology     = Enum.Technology.Future
+        LightingService.ClockTime      = 0
+        LightingService.Brightness     = 0
+        LightingService.Ambient        = Color3.fromRGB(20, 0, 40)
+        LightingService.OutdoorAmbient = Color3.fromRGB(30, 0, 60)
+        LightingService.FogColor       = Color3.fromRGB(10, 0, 30)
+        LightingService.FogStart       = 100
+        LightingService.FogEnd         = 600
+        local Atmo = Instance.new("Atmosphere")
+        Atmo.Name = "NeonAtmo"; Atmo.Density = 0.5; Atmo.Haze = 1
+        Atmo.Glare = 0; Atmo.Color = Color3.fromRGB(80, 0, 180)
+        Atmo.Decay = Color3.fromRGB(20, 0, 60); Atmo.Parent = LightingService
+        local CC = Instance.new("ColorCorrectionEffect")
+        CC.Name = "NeonCC"; CC.Brightness = -0.2; CC.Contrast = 0.5
+        CC.Saturation = 0.8; CC.TintColor = Color3.fromRGB(200, 100, 255)
+        CC.Parent = LightingService
+        local Bloom = Instance.new("BloomEffect")
+        Bloom.Name = "NeonBloom"; Bloom.Intensity = 2.0; Bloom.Size = 56; Bloom.Threshold = 0.5
+        Bloom.Parent = LightingService
+    end
+
+    MAP_PRESETS["Toxic Wasteland"] = function()
+        for _, v in ipairs(LightingService:GetChildren()) do
+            if v:IsA("Atmosphere") or v:IsA("BloomEffect")
+            or v:IsA("ColorCorrectionEffect") or v:IsA("SunRaysEffect") then
+                pcall(function() v:Destroy() end)
+            end
+        end
+        LightingService.Technology     = Enum.Technology.Future
+        LightingService.ClockTime      = 10
+        LightingService.Brightness     = 1.5
+        LightingService.Ambient        = Color3.fromRGB(30, 70, 10)
+        LightingService.OutdoorAmbient = Color3.fromRGB(50, 100, 20)
+        LightingService.FogColor       = Color3.fromRGB(40, 80, 10)
+        LightingService.FogStart       = 80
+        LightingService.FogEnd         = 500
+        local Atmo = Instance.new("Atmosphere")
+        Atmo.Name = "ToxicAtmo"; Atmo.Density = 0.6; Atmo.Haze = 3.5
+        Atmo.Glare = 0.1; Atmo.Color = Color3.fromRGB(100, 180, 20)
+        Atmo.Decay = Color3.fromRGB(30, 70, 0); Atmo.Parent = LightingService
+        local CC = Instance.new("ColorCorrectionEffect")
+        CC.Name = "ToxicCC"; CC.Brightness = 0.05; CC.Contrast = 0.25
+        CC.Saturation = 0.7; CC.TintColor = Color3.fromRGB(150, 255, 80)
+        CC.Parent = LightingService
+    end
+
+    MAP_PRESETS["Heaven"] = function()
+        for _, v in ipairs(LightingService:GetChildren()) do
+            if v:IsA("Atmosphere") or v:IsA("BloomEffect")
+            or v:IsA("ColorCorrectionEffect") or v:IsA("SunRaysEffect") then
+                pcall(function() v:Destroy() end)
+            end
+        end
+        LightingService.Technology     = Enum.Technology.Future
+        LightingService.ClockTime      = 12
+        LightingService.Brightness     = 10
+        LightingService.Ambient        = Color3.fromRGB(255, 255, 255)
+        LightingService.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+        LightingService.FogColor       = Color3.fromRGB(255, 255, 255)
+        LightingService.FogStart       = 500
+        LightingService.FogEnd         = 2000
+        local Atmo = Instance.new("Atmosphere")
+        Atmo.Name = "HeavenAtmo"; Atmo.Density = 0.1; Atmo.Haze = 2
+        Atmo.Glare = 1; Atmo.Color = Color3.fromRGB(255, 250, 220)
+        Atmo.Decay = Color3.fromRGB(255, 255, 255); Atmo.Parent = LightingService
+        local CC = Instance.new("ColorCorrectionEffect")
+        CC.Name = "HeavenCC"; CC.Brightness = 0.3; CC.Contrast = -0.2
+        CC.Saturation = -0.3; CC.TintColor = Color3.fromRGB(255, 255, 240)
+        CC.Parent = LightingService
+        local Bloom = Instance.new("BloomEffect")
+        Bloom.Name = "HeavenBloom"; Bloom.Intensity = 3.0; Bloom.Size = 56; Bloom.Threshold = 0.4
+        Bloom.Parent = LightingService
+    end
+
+    MAP_PRESETS["Inferno"] = function()
+        for _, v in ipairs(LightingService:GetChildren()) do
+            if v:IsA("Atmosphere") or v:IsA("BloomEffect")
+            or v:IsA("ColorCorrectionEffect") or v:IsA("SunRaysEffect") then
+                pcall(function() v:Destroy() end)
+            end
+        end
+        LightingService.Technology     = Enum.Technology.Future
+        LightingService.ClockTime      = 18
+        LightingService.Brightness     = 3
+        LightingService.Ambient        = Color3.fromRGB(150, 40, 0)
+        LightingService.OutdoorAmbient = Color3.fromRGB(200, 60, 0)
+        LightingService.FogColor       = Color3.fromRGB(100, 20, 0)
+        LightingService.FogStart       = 100
+        LightingService.FogEnd         = 700
+        local Atmo = Instance.new("Atmosphere")
+        Atmo.Name = "InfernoAtmo"; Atmo.Density = 0.5; Atmo.Haze = 4
+        Atmo.Glare = 0.5; Atmo.Color = Color3.fromRGB(255, 80, 0)
+        Atmo.Decay = Color3.fromRGB(120, 30, 0); Atmo.Parent = LightingService
+        local CC = Instance.new("ColorCorrectionEffect")
+        CC.Name = "InfernoCC"; CC.Brightness = 0.1; CC.Contrast = 0.4
+        CC.Saturation = 0.8; CC.TintColor = Color3.fromRGB(255, 140, 60)
+        CC.Parent = LightingService
+        local Bloom = Instance.new("BloomEffect")
+        Bloom.Name = "InfernoBloom"; Bloom.Intensity = 1.5; Bloom.Size = 45; Bloom.Threshold = 0.6
+        Bloom.Parent = LightingService
+    end
+
+    MAP_PRESETS["Deep Space"] = function()
+        for _, v in ipairs(LightingService:GetChildren()) do
+            if v:IsA("Atmosphere") or v:IsA("BloomEffect")
+            or v:IsA("ColorCorrectionEffect") or v:IsA("SunRaysEffect") then
+                pcall(function() v:Destroy() end)
+            end
+        end
+        LightingService.Technology     = Enum.Technology.Future
+        LightingService.ClockTime      = 0
+        LightingService.Brightness     = 0.1
+        LightingService.Ambient        = Color3.fromRGB(5, 0, 20)
+        LightingService.OutdoorAmbient = Color3.fromRGB(10, 0, 30)
+        LightingService.FogColor       = Color3.fromRGB(2, 0, 10)
+        LightingService.FogStart       = 2000
+        LightingService.FogEnd         = 20000
+        local Atmo = Instance.new("Atmosphere")
+        Atmo.Name = "SpaceAtmo"; Atmo.Density = 0; Atmo.Haze = 0
+        Atmo.Glare = 0; Atmo.Color = Color3.fromRGB(10, 0, 40)
+        Atmo.Decay = Color3.fromRGB(5, 0, 20); Atmo.Parent = LightingService
+        local CC = Instance.new("ColorCorrectionEffect")
+        CC.Name = "SpaceCC"; CC.Brightness = -0.3; CC.Contrast = 0.6
+        CC.Saturation = 0.3; CC.TintColor = Color3.fromRGB(150, 100, 255)
+        CC.Parent = LightingService
+    end
+
+    MAP_PRESETS["Matrix"] = function()
+        for _, v in ipairs(LightingService:GetChildren()) do
+            if v:IsA("Atmosphere") or v:IsA("BloomEffect")
+            or v:IsA("ColorCorrectionEffect") or v:IsA("SunRaysEffect") then
+                pcall(function() v:Destroy() end)
+            end
+        end
+        LightingService.Technology     = Enum.Technology.Future
+        LightingService.ClockTime      = 2
+        LightingService.Brightness     = 0.5
+        LightingService.Ambient        = Color3.fromRGB(0, 30, 0)
+        LightingService.OutdoorAmbient = Color3.fromRGB(0, 50, 0)
+        LightingService.FogColor       = Color3.fromRGB(0, 15, 0)
+        LightingService.FogStart       = 60
+        LightingService.FogEnd         = 400
+        local Atmo = Instance.new("Atmosphere")
+        Atmo.Name = "MatrixAtmo"; Atmo.Density = 0.45; Atmo.Haze = 2
+        Atmo.Glare = 0; Atmo.Color = Color3.fromRGB(0, 150, 0)
+        Atmo.Decay = Color3.fromRGB(0, 50, 0); Atmo.Parent = LightingService
+        local CC = Instance.new("ColorCorrectionEffect")
+        CC.Name = "MatrixCC"; CC.Brightness = -0.15; CC.Contrast = 0.5
+        CC.Saturation = 0.9; CC.TintColor = Color3.fromRGB(50, 255, 50)
+        CC.Parent = LightingService
+    end
+
+    local function _applyMapVisuals()
+        local fn = MAP_PRESETS[STATE.MapVisualsPreset]
+        if fn then
+            _mapVisualsApplied = true
+            pcall(fn)
+        end
+    end
+
+    local _prevMV     = STATE.MapVisuals
+    local _prevPreset = STATE.MapVisualsPreset
+    RunService.Stepped:Connect(function()
+        local want = STATE.MapVisuals and STATE.Master
+        local presetChanged = STATE.MapVisualsPreset ~= _prevPreset
+        _prevPreset = STATE.MapVisualsPreset
+        if want ~= _prevMV then
+            _prevMV = want
+            if want then _applyMapVisuals() else _restoreMapVisuals() end
+        elseif want and presetChanged then
+            _restoreMapVisuals()
+            _applyMapVisuals()
+        end
+    end)
 end
 
 -----------------------------------
@@ -1652,25 +2227,11 @@ do
     local _acDescConn = nil
     local _prevACBypass = STATE.AntiCheatBypass
 
-    -- Install setmetatable hook once; intercepts only while STATE.AntiCheatBypass is on
-    pcall(function()
-        local _orig
-        _orig = hookfunction(getrenv().setmetatable, newcclosure(function(tbl, mt)
-            if STATE.AntiCheatBypass and mt and typeof(mt) == "table" and rawget(mt, "__mode") == "kv" then
-                local tr = debug.traceback()
-                if tr:find("MiscellaneousController") then
-                    return _orig({1, 2, 3}, {})
-                end
-            end
-            return _orig(tbl, mt)
-        end))
-    end)
-
     RunService.Stepped:Connect(function()
         -- One-shot: run bypass ops the first time the toggle is enabled
         if STATE.AntiCheatBypass and not _acApplied then
             _acApplied = true
-            task.spawn(function()
+            task.delay(2, function()
                 -- Disable scripts with AC-related names
                 pcall(function()
                     local tags = { "anticheat", "ac", "detection", "ban", "kick", "security", "moderation" }
@@ -1693,29 +2254,7 @@ do
                     ev.Name = "ClientAlert"
                     ev.Parent = LocalPlayer
                 end)
-                -- Patch ban/kick functions found in the GC
-                pcall(function()
-                    local rf  = game:GetService("ReplicatedFirst")
-                    local tgt = rf:WaitForChild("LocalScript3", 10)
-                    for _, fn in ipairs(getgc(false)) do
-                        if type(fn) ~= "function" then continue end
-                        local ok1, env = pcall(getfenv, fn)
-                        if not ok1 or type(env) ~= "table" then continue end
-                        local ok2, scr = pcall(function() return rawget(env, "script") end)
-                        if not ok2 or not scr or typeof(scr) ~= "Instance" then continue end
-                        local ok3, ss = pcall(tostring, scr)
-                        if not ok3 then continue end
-                        if not (scr == tgt or (type(ss) == "string" and ss:find("LoadingScreen"))) then continue end
-                        local ok4, consts = pcall(debug.getconstants, fn)
-                        if not ok4 or type(consts) ~= "table" then continue end
-                        for _, c in ipairs(consts) do
-                            if type(c) == "string" and (c:find("TakeTheL") or c:find("ban") or c:find("kick")) then
-                                pcall(hookfunction, fn, function() end)
-                                break
-                            end
-                        end
-                    end
-                end)
+                dbg("AC", "bypass applied")
             end)
         end
         -- Toggle-off: stop watching for new AC scripts
@@ -1744,12 +2283,18 @@ do
             if not mods then return end
 
             local enumLib, cosLib, datCtrl
+            dbg("SKIN", "requiring EnumLibrary")
             pcall(function()
                 enumLib = require(mods:WaitForChild("EnumLibrary", 10))
-                if enumLib then pcall(function() enumLib:WaitForEnumBuilder() end) end
             end)
+            task.wait()
+            dbg("SKIN", "requiring CosmeticLibrary")
             pcall(function() cosLib  = require(mods:WaitForChild("CosmeticLibrary", 10)) end)
+            task.wait()
+            dbg("SKIN", "requiring PlayerDataController")
             pcall(function() datCtrl = require(ctrl:WaitForChild("PlayerDataController", 10)) end)
+            task.wait()
+            dbg("SKIN", "cosLib=" .. tostring(cosLib ~= nil) .. " datCtrl=" .. tostring(datCtrl ~= nil))
             if not cosLib or not datCtrl then return end
 
             local eq, favs = {}, {}
