@@ -91,7 +91,9 @@ local STATE = {
     ESPMaxDistance = 500,
     ESPColorR = 240, ESPColorG = 240, ESPColorB = 240,
     TeamCheck = false,
-    RainbowVisuals = false
+    RainbowVisuals = false,
+    StreamingMode = false,
+    StreamingAlias = "Streamer"
 }
 dbg("INIT", "STATE initialized")
 
@@ -119,7 +121,8 @@ local SAVEABLE_KEYS = {
     "Fly",
     "MapVisuals","MapVisualsPreset",
     "ESPColorR","ESPColorG","ESPColorB",
-    "RainbowVisuals"
+    "RainbowVisuals",
+    "StreamingMode","StreamingAlias"
 }
 
 local _saveDirty = false
@@ -210,11 +213,11 @@ end
 local function isVisible(part)
     local origin = Camera.CFrame.Position
     local dir = (part.Position - origin)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
+    local _vp = RaycastParams.new()
+    _vp.FilterType = Enum.RaycastFilterType.Exclude
     local localChar = LocalPlayer.Character
-    params.FilterDescendantsInstances = localChar and {localChar} or {}
-    local result = Workspace:Raycast(origin, dir, params)
+    _vp.FilterDescendantsInstances = localChar and {localChar} or {}
+    local result = Workspace:Raycast(origin, dir, _vp)
     if not result then return true end
     return result.Instance:IsDescendantOf(part.Parent)
 end
@@ -235,6 +238,7 @@ end
 local function getRainbow(offsetFrac)
     return Color3.fromHSV((tick() * 0.15 + (offsetFrac or 0)) % 1, 1, 1)
 end
+local _rbColor = Color3.new(1, 1, 1) -- updated once per frame, shared by all rainbow elements
 
 -----------------------------------
 -- FOV & AIMBOT & TRIGGERBOT
@@ -484,11 +488,8 @@ RunService.Stepped:Connect(function()
     if STATE.NoRecoil and LocalPlayer.Character then
         local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
         if tool then
-            for _, v in pairs(tool:GetDescendants()) do
-                if v.Name:lower() == "recoil" then
-                    pcall(function() v.Value = 0 end)
-                end
-            end
+            local recoilVal = tool:FindFirstChild("Recoil", true)
+            if recoilVal then pcall(function() recoilVal.Value = 0 end) end
         end
     end
     
@@ -544,10 +545,12 @@ end)
 -----------------------------------
 
 RunService.RenderStepped:Connect(function()
+    if STATE.RainbowVisuals then _rbColor = getRainbow(0) end
+
     if FOVCircle then
         FOVCircle.Radius = STATE.AimFOV
         FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-        FOVCircle.Color = STATE.RainbowVisuals and getRainbow(0.8) or Color3.fromRGB(200, 200, 200)
+        FOVCircle.Color = STATE.RainbowVisuals and _rbColor or Color3.fromRGB(200, 200, 200)
         FOVCircle.Visible = (STATE.Aimbot and STATE.Master)
     end
 
@@ -580,10 +583,11 @@ RunService.RenderStepped:Connect(function()
                 local part = char and (char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart"))
                 if part then
                     local screenPos, onScreen, depth = worldToScreen(part.Position)
-                    if onScreen and depth > 0 then
+                    local lineDist = getDistance(lineTarget)
+                    if onScreen and depth > 0 and lineDist <= 400 then
                         TargetLineDrawing.From  = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
                         TargetLineDrawing.To    = screenPos
-                        TargetLineDrawing.Color = STATE.RainbowVisuals and getRainbow(0.25) or Color3.fromRGB(255, 50, 50)
+                        TargetLineDrawing.Color = STATE.RainbowVisuals and _rbColor or Color3.fromRGB(255, 50, 50)
                         TargetLineDrawing.Visible = true
                     else
                         TargetLineDrawing.Visible = false
@@ -739,7 +743,7 @@ local function setupESP(player)
             local dist = getDistance(player)
             
             if onScreen and depth > 0 and dist <= STATE.ESPMaxDistance then
-                local espClr = STATE.RainbowVisuals and getRainbow(0) or Color3.fromRGB(STATE.ESPColorR, STATE.ESPColorG, STATE.ESPColorB)
+                local espClr = STATE.RainbowVisuals and _rbColor or Color3.fromRGB(STATE.ESPColorR, STATE.ESPColorG, STATE.ESPColorB)
                 local headScreen = head and worldToScreen(head.Position + Vector3.new(0, 1, 0)) or worldToScreen(hrp.Position + Vector3.new(0, 3, 0))
                 local footScreen = worldToScreen(hrp.Position - Vector3.new(0, 3.5, 0))
                 
@@ -950,7 +954,7 @@ RunService.RenderStepped:Connect(function()
         end
         return
     end
-    local chamsColor = STATE.RainbowVisuals and getRainbow(0.33) or Color3.fromRGB(STATE.ChamsR, STATE.ChamsG, STATE.ChamsB)
+    local chamsColor = STATE.RainbowVisuals and _rbColor or Color3.fromRGB(STATE.ChamsR, STATE.ChamsG, STATE.ChamsB)
     for player, data in pairs(CHAMS_OBJECTS) do
         if data.hl and data.hl.Parent then
             local isEnemy = not STATE.TeamCheck
@@ -1104,7 +1108,7 @@ end)
 -- Render smooth bezier trails
 RunService.RenderStepped:Connect(function()
     local lineIdx = 0
-    local color = STATE.RainbowVisuals and getRainbow(0.67) or Color3.fromRGB(STATE.AimTrajR, STATE.AimTrajG, STATE.AimTrajB)
+    local color = STATE.RainbowVisuals and _rbColor or Color3.fromRGB(STATE.AimTrajR, STATE.AimTrajG, STATE.AimTrajB)
 
     if STATE.AimTrajectory and STATE.Master then
         for player, data in pairs(TRAJ_DATA) do
@@ -1208,7 +1212,7 @@ RunService.RenderStepped:Connect(function(dt)
         local cy    = Camera.ViewportSize.Y / 2
         local inner = 6
         local outer = 20
-        local color = STATE.RainbowVisuals and getRainbow(0.5) or Color3.new(1, 1, 1)
+        local color = STATE.RainbowVisuals and _rbColor or Color3.new(1, 1, 1)
         for i = 1, 4 do
             local angle = math.rad(_spinCXAngle + (i - 1) * 90)
             local ln = _spinCXLines[i]
@@ -1480,6 +1484,57 @@ tMisc:CreateToggle({ Name = "AC Bypass", CurrentValue = STATE.AntiCheatBypass, F
 
 tMisc:CreateSection("Cosmetics")
 tMisc:CreateToggle({ Name = "Unlock All Skins", CurrentValue = STATE.UnlockSkins, Flag = "UnlockSkins", Callback = function(v) STATE.UnlockSkins = v; saveConfig() end })
+
+tMisc:CreateSection("Streaming Mode")
+tMisc:CreateToggle({ Name = "Hide Username", CurrentValue = STATE.StreamingMode, Flag = "StreamingMode", Callback = function(v) STATE.StreamingMode = v; saveConfig() end })
+tMisc:CreateInput({ Name = "Display As", CurrentValue = STATE.StreamingAlias, PlaceholderText = "Streamer", RemoveTextAfterFocusLost = false, Flag = "StreamingAlias",
+    Callback = function(v) STATE.StreamingAlias = (v ~= "" and v) or "Streamer"; saveConfig() end })
+
+tMisc:CreateSection("Server")
+tMisc:CreateButton({ Name = "Server Hop", Callback = function()
+    task.spawn(function()
+        local TeleportService = game:GetService("TeleportService")
+        local HttpService2    = game:GetService("HttpService")
+        local placeId         = game.PlaceId
+        local currentJobId    = game.JobId
+
+        -- Fetch server list via Roblox API (cursor-paginated)
+        local found = nil
+        local cursor = ""
+        repeat
+            local url = "https://games.roblox.com/v1/games/" .. placeId
+                .. "/servers/Public?sortOrder=Asc&limit=100"
+                .. (cursor ~= "" and ("&cursor=" .. cursor) or "")
+            local ok, raw = pcall(function() return game:HttpGet(url) end)
+            if not ok then break end
+            local ok2, data = pcall(function() return HttpService2:JSONDecode(raw) end)
+            if not ok2 or type(data) ~= "table" then break end
+            local servers = data.data
+            if type(servers) ~= "table" then break end
+            for _, srv in ipairs(servers) do
+                if srv.id ~= currentJobId
+                    and type(srv.id) == "string"
+                    and type(srv.playing) == "number"
+                    and type(srv.maxPlayers) == "number"
+                    and srv.playing < srv.maxPlayers then
+                    found = srv.id
+                    break
+                end
+            end
+            cursor = (data.nextPageCursor and tostring(data.nextPageCursor)) or ""
+        until found or cursor == "" or cursor == "null"
+
+        if found then
+            sendNotification("Server Hop", "Hopping to a new server...", 3)
+            task.wait(1)
+            pcall(function()
+                TeleportService:TeleportToPlaceInstance(placeId, found, LocalPlayer)
+            end)
+        else
+            sendNotification("Server Hop", "No available servers found.", 4)
+        end
+    end)
+end })
 
 tMisc:CreateSection("Codes")
 tMisc:CreateButton({ Name = "Redeem All Codes", Callback = function()
@@ -1842,14 +1897,10 @@ end)
 
 -- Load modules and hook StartShooting after 0.5s so they don't block the main thread
 task.delay(0.5, function()
-    dbg("SA", "requiring Gun module (async)")
     do local ok, m = pcall(function() return require(LocalPlayer.PlayerScripts.Modules.ItemTypes.Gun) end); if ok and type(m) == "table" then GunModule = m end end
-    dbg("SA", "Gun done type=" .. type(GunModule))
-    dbg("SA", "requiring Utility module (async)")
+    task.wait()
     do local ok, m = pcall(function() return require(ReplicatedStorage.Modules.Utility) end); if ok and type(m) == "table" then UtilityModule = m end end
-    dbg("SA", "Utility done type=" .. type(UtilityModule))
     if type(GunModule) == "table" and GunModule.StartShooting then
-        dbg("SA", "hooking GunModule.StartShooting")
         customEnv.SilentAim.OriginalShoot = GunModule.StartShooting
         GunModule.StartShooting = function(self, ...)
             local args = { customEnv.SilentAim.OriginalShoot(self, ...) }
@@ -2269,6 +2320,91 @@ do
 end
 
 -----------------------------------
+-- STREAMING MODE
+-----------------------------------
+do
+    local _streamPatched = {}
+    local _scanConns     = {}
+
+    local function patchObj(obj)
+        if not STATE.StreamingMode then return end
+        if not (obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox")) then return end
+        local name  = LocalPlayer.Name
+        local disp  = LocalPlayer.DisplayName
+        local alias = (STATE.StreamingAlias ~= "" and STATE.StreamingAlias) or "Streamer"
+        local txt   = obj.Text
+        if txt == "" then return end
+        local new = txt:gsub(name, alias)
+        if disp ~= name then new = new:gsub(disp, alias) end
+        if new ~= txt then
+            _streamPatched[obj] = _streamPatched[obj] or txt
+            pcall(function() obj.Text = new end)
+        end
+    end
+
+    local function scanRoot(root)
+        pcall(function()
+            for _, d in ipairs(root:GetDescendants()) do
+                patchObj(d)
+            end
+        end)
+    end
+
+    local function enableStreaming()
+        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+        if pg then
+            scanRoot(pg)
+            _scanConns[1] = pg.DescendantAdded:Connect(function(d)
+                task.defer(function() patchObj(d) end)
+            end)
+        end
+        -- Async workspace scan (yields every 100 items to avoid hitching)
+        task.spawn(function()
+            local i = 0
+            pcall(function()
+                for _, d in ipairs(workspace:GetDescendants()) do
+                    if d:IsA("TextLabel") or d:IsA("TextButton") then
+                        patchObj(d)
+                    end
+                    i = i + 1
+                    if i % 100 == 0 then task.wait() end
+                end
+            end)
+        end)
+        _scanConns[2] = workspace.DescendantAdded:Connect(function(d)
+            if d:IsA("TextLabel") or d:IsA("TextButton") then
+                task.defer(function() patchObj(d) end)
+            end
+        end)
+    end
+
+    local function disableStreaming()
+        for _, c in pairs(_scanConns) do pcall(function() c:Disconnect() end) end
+        _scanConns = {}
+        for obj, txt in pairs(_streamPatched) do
+            pcall(function() if obj and obj.Parent then obj.Text = txt end end)
+        end
+        _streamPatched = {}
+    end
+
+    -- Periodic re-scan every 1s: game may overwrite text (leaderboard refresh, etc.)
+    task.spawn(function()
+        while task.wait(1) do
+            if not STATE.StreamingMode then continue end
+            local pg = LocalPlayer:FindFirstChild("PlayerGui")
+            if pg then scanRoot(pg) end
+        end
+    end)
+
+    local _prevStream = false
+    RunService.Stepped:Connect(function()
+        if STATE.StreamingMode == _prevStream then return end
+        _prevStream = STATE.StreamingMode
+        if STATE.StreamingMode then enableStreaming() else disableStreaming() end
+    end)
+end
+
+-----------------------------------
 -- UNLOCK ALL SKINS / WRAPS / CHARMS
 -----------------------------------
 do
@@ -2482,6 +2618,7 @@ do
 
             -- Inject equipped cosmetics into the weapon viewmodel on creation
             local cliItem
+            task.wait()
             pcall(function() cliItem = require(LocalPlayer.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.ClientItem) end)
             if cliItem and cliItem._CreateViewModel then
                 local origCVM = cliItem._CreateViewModel
@@ -2510,6 +2647,7 @@ do
             -- Patch ClientViewModel.new to pass cosmetic data during replication
             local vmMod = LocalPlayer.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.ClientItem:FindFirstChild("ClientViewModel")
             if vmMod then
+                task.wait()
                 local CVM     = require(vmMod)
                 local origNew = CVM.new
                 CVM.new = function(repData, cliItm)
