@@ -1,6 +1,6 @@
 --[[
-    Cline Premium UI Library (Patched & Refactored)
-    Ensures correct CanvasGroup usage and clean method inheritance.
+    Cline Premium UI Library
+    Fixed Version
 ]]
 
 local CoreGui = game:GetService("CoreGui")
@@ -11,6 +11,7 @@ local Players = game:GetService("Players")
 
 local LocalPlayer = Players.LocalPlayer
 
+-- [ CONFIGURATION & KEY VARIABLES ] --
 local Cline = {
     Themes = {
         Dark = {
@@ -39,6 +40,7 @@ local Cline = {
 
 local Theme = Cline.Themes[Cline.CurrentTheme]
 
+-- [ INTERIOR UTILITIES ] --
 local function Create(className, properties)
     local inst = Instance.new(className)
     for k, v in pairs(properties) do inst[k] = v end
@@ -76,6 +78,32 @@ local function MakeDraggable(dragHandle, object)
     end)
 end
 
+-- [ CONFIGURATION STORAGE ENGINE ] --
+local function SaveConfig()
+    if writefile then
+        pcall(function()
+            if not isfolder(Cline.ConfigFolder) then makefolder(Cline.ConfigFolder) end
+            writefile(Cline.ConfigFolder .. "/" .. Cline.CurrentConfig, HttpService:JSONEncode(Cline.SavedStates))
+        end)
+    end
+end
+
+local function LoadConfig(callbackMap)
+    if readfile then
+        pcall(function()
+            local path = Cline.ConfigFolder .. "/" .. Cline.CurrentConfig
+            if isfile(path) then
+                local data = HttpService:JSONDecode(readfile(path))
+                for k, v in pairs(data) do
+                    Cline.SavedStates[k] = v
+                    if callbackMap[k] then task.spawn(callbackMap[k], v) end
+                end
+            end
+        end)
+    end
+end
+
+-- [ MAIN ENGINE INITIALIZATION ] --
 function Cline:CreateWindow(options)
     options = options or {}
     
@@ -83,7 +111,6 @@ function Cline:CreateWindow(options)
 
     local ScreenGui = Create("ScreenGui", { Name = "ClineExactUI", Parent = CoreGui, ResetOnSpawn = false })
     
-    -- FIXED: Changed from "Frame" to "CanvasGroup" to fix the GroupTransparency error
     local MainFrame = Create("CanvasGroup", {
         Name = "Main", Parent = ScreenGui, BackgroundColor3 = Theme.Background,
         Position = UDim2.new(0.5, -400, 0.5, -275), Size = UDim2.new(0, 800, 0, 550), 
@@ -107,7 +134,6 @@ function Cline:CreateWindow(options)
 
     MakeDraggable(Sidebar, MainFrame)
 
-    -- Fixed Visibility Control via GroupTransparency
     function Cline:SetVisible(state)
         Cline.Toggled = state
         Tween(MainFrame, { GroupTransparency = state and 0 or 1 }, 0.2)
@@ -175,7 +201,6 @@ function Cline:CreateWindow(options)
             WindowInstance.ActiveTab = tabName
         end
 
-        -- FIXED: Structural table creation to guarantee method lookup availability
         local SectionEngine = {}
 
         function SectionEngine:CreateSection(sectionTitle)
@@ -228,6 +253,7 @@ function Cline:CreateWindow(options)
                     Tween(Switch, { BackgroundColor3 = state and Theme.Accent or Theme.Element })
                     Tween(InnerNode, { Position = state and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8) })
                     callback(state)
+                    SaveConfig()
                 end)
             end
 
@@ -236,6 +262,8 @@ function Cline:CreateWindow(options)
 
         return SectionEngine
     end
+
+    WindowInstance.LoadSavedConfig = function() LoadConfig(WindowInstance.CallbackRegistry) end
 
     return WindowInstance
 end
