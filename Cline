@@ -14,9 +14,14 @@ local Mouse = LocalPlayer:GetMouse()
 
 -- Determine optimal GUI parent (handles Executors vs Studio/Standard)
 local GuiService = (game:GetService("RunService"):IsStudio() and LocalPlayer.PlayerGui) or (cloneref and cloneref(CoreGui)) or CoreGui
-if not GuiService:FindFirstChild("RobloxGui") and not game:GetService("RunService"):IsStudio() then
-    GuiService = LocalPlayer.PlayerGui
+local function GetSafeGuiParent()
+    if gethui then return gethui() end -- Standard for modern executors
+    local success, core = pcall(function() return game:GetService("CoreGui") end)
+    if success and core then return core end
+    return LocalPlayer:WaitForChild("PlayerGui") -- Fallback for Studio/Strict environments
 end
+
+local GuiService = GetSafeGuiParent()
 
 -- Cleanup duplicate executions
 if GuiService:FindFirstChild("ClineUI") then
@@ -199,6 +204,7 @@ function Library:CreateWindow(options)
     TabContainer.Parent = MainFrame
     ProfileFrame.Parent = Sidebar
     TabList.Parent = Sidebar
+    MainFrame.Parent = ScreenGui
 
     MakeDraggable(Topbar, MainFrame)
     MakeDraggable(Sidebar, MainFrame)
