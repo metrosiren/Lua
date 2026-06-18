@@ -782,7 +782,6 @@ function ClineUI:CreateWindow(cfg)
                 SecTitle.TextSize          = 10
                 SecTitle.Font              = Enum.Font.GothamBold
                 SecTitle.TextXAlignment    = Enum.TextXAlignment.Left
-                SecTitle.LetterSpacing     = 1
                 SecTitle.ZIndex            = 5
                 SecTitle.Parent            = SecFrame
 
