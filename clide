@@ -66,8 +66,12 @@ local function Create(className, properties, children)
     local inst = Instance.new(className)
     local themeLinks = {}
     
+    -- List of properties that should NEVER be treated as themeable colors
+    local excludedProps = {["Name"] = true, ["Text"] = true, ["PlaceholderText"] = true, ["Font"] = true}
+
     for k, v in pairs(properties) do
-        if type(v) == "string" and Library.Theme[v] then
+        -- Only attempt theme linking if the key is not in our exclusion list
+        if not excludedProps[k] and type(v) == "string" and Library.Theme[v] then
             inst[k] = Library.Theme[v]
             themeLinks[k] = v
         else
