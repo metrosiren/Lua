@@ -15,7 +15,8 @@ local MAX_STUD_DISTANCE  = 10000
 
 local STATE = {
     Master = true,
-    Teleport = false, AutoClick = false, NoRecoil = false, InfJump = false, FastWeaps = false,
+    Teleport = false, AutoClick = false, NoRecoil = false, InfJump = false,
+    FireRateEnabled = false, FireRate = 0.05,
 
     SilentAim = false, SilentAimMode = "Regular", SilentAimHitChance = 100,
 
@@ -36,22 +37,31 @@ local STATE = {
     ImpactMarkers = false, ImpactR = 255, ImpactG = 255, ImpactB = 255,
     AimTrajectory = false, AimTrajR = 100, AimTrajG = 200, AimTrajB = 255,
 
-    SpinCrosshair = false, TargetLine = false, Noclip = false, Fly = false,
+    CrosshairEnabled = false, CrosshairStyle = "emoji", CrosshairSpin = false, CrosshairSize = 100,
+    TargetLine = false, Noclip = false, Fly = false,
     MapVisuals = false, MapVisualsPreset = "Arctic Night", HighSaturation = false,
+    MapColorEnabled = false, MapColorR = 255, MapColorG = 0, MapColorB = 128,
+    MapDome = false, MapDomeMaterial = "Neon",
+    MapDomeColorR = 255, MapDomeColorG = 128, MapDomeColorB = 0, MapDomeTransparency = 0,
 
     ESP = false, ESPBoxStyle = "Full Box", ESPBoxFill = false, ESPTracer = false,
     ESPName = true, ESPSkeleton = false, ESPHealthBar = false, ESPDistance = false,
     ESPLevel = false, ESPWinStreak = false,
-    ESPMaxDistance = 500, ESPColorR = 240, ESPColorG = 240, ESPColorB = 240,
+    ESPMaxDistance = 500,
+    ESPColorR = 240, ESPColorG = 240, ESPColorB = 240,
+    ESPBoxColorR = 240, ESPBoxColorG = 240, ESPBoxColorB = 240,
+    ESPTracerColorR = 240, ESPTracerColorG = 240, ESPTracerColorB = 240,
+    ESPNameColorR = 255, ESPNameColorG = 255, ESPNameColorB = 255,
+    TargetLineColorR = 255, TargetLineColorG = 50, TargetLineColorB = 50,
     ESPFont = "UI", ESPTextSize = 13,
 
-    TeamCheck = false, RainbowVisuals = false,
+    TeamCheck = false, RainbowVisuals = false, RainbowMap = false,
     StreamingMode = false, StreamingAlias = "Streamer",
 }
 
 local CONFIG_FILE   = "rivals_rage_config.json"
 local SAVEABLE_KEYS = {
-    "Master","Teleport","AutoClick","NoRecoil","InfJump","FastWeaps",
+    "Master","Teleport","AutoClick","NoRecoil","InfJump","FireRateEnabled","FireRate",
     "SilentAim","SilentAimMode","SilentAimHitChance","Aimbot","AimSmoothness","AimHumanize","AimFOV",
     "AimVisibleOnly","AimMaxDistance","AimMode","AimPart","AimKeyName",
     "Triggerbot","TriggerbotDelay",
@@ -65,10 +75,16 @@ local SAVEABLE_KEYS = {
     "BulletTracers","TracerR","TracerG","TracerB",
     "ImpactMarkers","ImpactR","ImpactG","ImpactB",
     "AimTrajectory","AimTrajR","AimTrajG","AimTrajB",
-    "SpinCrosshair","TargetLine","Noclip","Fly",
+    "CrosshairEnabled","CrosshairStyle","CrosshairSpin","CrosshairSize","TargetLine","Noclip","Fly",
     "MapVisuals","MapVisualsPreset","HighSaturation",
+    "MapColorEnabled","MapColorR","MapColorG","MapColorB",
+    "MapDome","MapDomeMaterial","MapDomeColorR","MapDomeColorG","MapDomeColorB","MapDomeTransparency",
     "ESPColorR","ESPColorG","ESPColorB",
-    "RainbowVisuals","StreamingMode","StreamingAlias",
+    "ESPBoxColorR","ESPBoxColorG","ESPBoxColorB",
+    "ESPTracerColorR","ESPTracerColorG","ESPTracerColorB",
+    "ESPNameColorR","ESPNameColorG","ESPNameColorB",
+    "TargetLineColorR","TargetLineColorG","TargetLineColorB",
+    "RainbowVisuals","RainbowMap","StreamingMode","StreamingAlias",
 }
 
 local AIM_KEYBIND_OPTIONS = { "RMB","LMB","MMB","Q","E","F","R","Z","X","C","V","Mobile" }
@@ -165,9 +181,43 @@ local function getDistance(player)
     return (r1.Position - r2.Position).Magnitude
 end
 
+local teammateCache = {}
+
+local function isTeammate(player)
+    if not player then
+        return false
+    end
+
+    local cached = teammateCache[player]
+    if cached ~= nil then
+        return cached
+    end
+
+    local localTeam = LocalPlayer:GetAttribute("TeamID")
+    local otherTeam = player:GetAttribute("TeamID")
+
+    if localTeam ~= nil and otherTeam ~= nil then
+        local same = tostring(localTeam) == tostring(otherTeam)
+        teammateCache[player] = same
+        return same
+    end
+
+    if LocalPlayer.Team and player.Team then
+        local same = LocalPlayer.Team == player.Team
+        teammateCache[player] = same
+        return same
+    end
+
+    teammateCache[player] = false
+    return false
+end
+
 local function isEnemy(player)
-    if not STATE.TeamCheck then return true end
-    return player.Team == nil or LocalPlayer.Team == nil or player.Team ~= LocalPlayer.Team
+    if not STATE.TeamCheck then
+        return true
+    end
+
+    return not isTeammate(player)
 end
 
 local _rbColor = Color3.new(1, 1, 1)
@@ -293,12 +343,13 @@ end)
 
 local function applyFastWeapons()
     if type(ItemLibrary) ~= "table" then return end
+    local cd = math.max(STATE.FireRate, 0.001)
     for _, data in pairs(ItemLibrary) do
         if type(data) == "table" then
             data.ShootSpread = 0; data.ShootAccuracy = 0; data.ShootRecoil = 0
-            data.AttackCooldown = 0; data.SwingCooldown = 0; data.MeleeCooldown = 0
-            data.Cooldown = 0; data.RecoveryTime = 0; data.ResetTime = 0
-            data.ShootCooldown = 0.001; data.ShootBurstCooldown = 0.001
+            data.AttackCooldown = cd; data.SwingCooldown = cd; data.MeleeCooldown = cd
+            data.Cooldown = cd; data.RecoveryTime = cd; data.ResetTime = cd
+            data.ShootCooldown = cd; data.ShootBurstCooldown = cd
         end
     end
 end
@@ -490,7 +541,10 @@ local function updateESP(player)
     local footScreen = worldToScreen(hrp.Position - Vector3.new(0, 3.0, 0))
     local height     = math.max(math.abs(footScreen.Y - topScreen.Y), 2)
     local width      = height * 0.55
-    local espClr     = visualColor(STATE.ESPColorR, STATE.ESPColorG, STATE.ESPColorB)
+    local espClr     = visualColor(STATE.ESPColorR,       STATE.ESPColorG,       STATE.ESPColorB)
+    local boxClr     = visualColor(STATE.ESPBoxColorR,    STATE.ESPBoxColorG,    STATE.ESPBoxColorB)
+    local tracerClr  = visualColor(STATE.ESPTracerColorR, STATE.ESPTracerColorG, STATE.ESPTracerColorB)
+    local nameClr    = visualColor(STATE.ESPNameColorR,   STATE.ESPNameColorG,   STATE.ESPNameColorB)
     local centerX    = hrpPos.X
     local left       = centerX - width/2
     local right      = centerX + width/2
@@ -507,14 +561,14 @@ local function updateESP(player)
     if showFull then
         obj.Box.Size     = Vector2.new(width, height)
         obj.Box.Position = Vector2.new(left, top)
-        obj.Box.Color    = espClr
+        obj.Box.Color    = boxClr
     end
 
     obj.BoxFill.Visible = showFull and STATE.ESPBoxFill
     if obj.BoxFill.Visible then
         obj.BoxFill.Size     = Vector2.new(width, height)
         obj.BoxFill.Position = Vector2.new(left, top)
-        obj.BoxFill.Color    = espClr
+        obj.BoxFill.Color    = boxClr
     end
 
     -- corner box: 8 lines (4 corners × horizontal + vertical arm), length = 25% of dimension
@@ -529,9 +583,9 @@ local function updateESP(player)
     local li = 1
     for _, c in ipairs(corners) do
         obj.CornerLines[li].From    = c[1]; obj.CornerLines[li].To    = c[2]
-        obj.CornerLines[li].Color   = espClr; obj.CornerLines[li].Visible = showCorner
+        obj.CornerLines[li].Color   = boxClr; obj.CornerLines[li].Visible = showCorner
         obj.CornerLines[li+1].From  = c[1]; obj.CornerLines[li+1].To  = c[3]
-        obj.CornerLines[li+1].Color = espClr; obj.CornerLines[li+1].Visible = showCorner
+        obj.CornerLines[li+1].Color = boxClr; obj.CornerLines[li+1].Visible = showCorner
         li = li + 2
     end
 
@@ -539,7 +593,7 @@ local function updateESP(player)
     if STATE.ESPTracer then
         obj.Tracer.From  = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y)
         obj.Tracer.To    = Vector2.new(centerX, bot)
-        obj.Tracer.Color = espClr
+        obj.Tracer.Color = tracerClr
     end
 
     local nameOffset = espSize + 2
@@ -549,7 +603,7 @@ local function updateESP(player)
         obj.Name.Size     = espSize
         obj.Name.Font     = espFont
         obj.Name.Position = Vector2.new(centerX, top - nameOffset)
-        obj.Name.Color    = espClr
+        obj.Name.Color    = nameClr
     end
 
     -- below-box text stack: distance, level, win streak
@@ -727,7 +781,6 @@ workspace.DescendantAdded:Connect(function(obj) task.defer(processBulletObj, obj
 
 local TRAJ_DATA       = {}
 local TRAJ_MAX_PTS    = 15
-local TRAJ_LOOK_DIST  = 12
 local TRAJ_SUBSEG     = 5
 local TRAJ_INTERVAL   = 1/30
 local TRAJ_LINE_POOL  = {}
@@ -755,31 +808,101 @@ for _, p in ipairs(Players:GetPlayers()) do setupTrajectory(p) end
 Players.PlayerAdded:Connect(setupTrajectory)
 Players.PlayerRemoving:Connect(cleanupTrajectory)
 
--- ─── Spin Crosshair ──────────────────────────────────────────────────────────
+-- ─── Crosshair ───────────────────────────────────────────────────────────────
 
-local _spinLines  = {}
-local _spinReady  = false
-local _spinAngle  = 0
-local SPIN_SPEED  = 120
+local CROSSHAIR_STYLES = { "emoji", "heart", "star", "soyjack", "trump", "youngSheldon", "quagmire", "portal" }
+local CROSSHAIR_DECALS = {
+    emoji       = "rbxassetid://11765927979",
+    heart       = "rbxassetid://12323570774",
+    star        = "rbxassetid://16161023805",
+    soyjack     = "rbxassetid://12255190358",
+    trump       = "rbxassetid://15476503151",
+    youngSheldon= "rbxassetid://93056170603996",
+    quagmire    = "rbxassetid://11670764807",
+    portal      = "rbxassetid://5669601841",
+}
+-- Base sizes in px at 100% scale — face/portrait decals larger, icon decals smaller
+local CROSSHAIR_SIZE = {
+    emoji       = 48,
+    heart       = 44,
+    star        = 48,
+    soyjack     = 72,
+    trump       = 72,
+    youngSheldon= 72,
+    quagmire    = 72,
+    portal      = 56,
+}
 
-local function setupSpinCrosshair()
-    if _spinReady or not Drawing then return end
-    _spinReady = true
-    for i = 1, 4 do
-        _spinLines[i] = newDrawing("Line", { Thickness = 2, Color = Color3.new(1,1,1), Transparency = 1, Visible = false })
+local SPIN_SPEED      = 120
+local _crosshairAngle = 0
+local _chGui          = nil
+local _chImg          = nil
+local _chStyle        = nil  -- last applied style
+
+local function buildCrosshairGui()
+    -- Destroy any leftover
+    if _chGui then pcall(function() _chGui:Destroy() end) end
+    _chGui = nil; _chImg = nil
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name          = "RBCrosshair"
+    gui.ResetOnSpawn  = false
+    gui.IgnoreGuiInset = true
+    gui.DisplayOrder  = 10000
+
+    -- Try gethui() first (protected, won't be cleared by Roblox), then PlayerGui
+    -- Never use WaitForChild here — this runs outside any RunService callback
+    local parented = false
+    if typeof(gethui) == "function" then
+        pcall(function()
+            gui.Parent = gethui()
+            parented = gui.Parent ~= nil
+        end)
     end
-    _spinLines[5] = newDrawing("Circle", {
-        Radius = 2, Filled = true, NumSides = 8, Thickness = 1,
-        Color = Color3.new(1,1,1), Transparency = 1, Visible = false,
-    })
+    if not parented then
+        pcall(function()
+            gui.Parent = game:GetService("CoreGui")
+            parented = gui.Parent ~= nil
+        end)
+    end
+    if not parented then
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if pg then gui.Parent = pg end
+    end
+
+    local img = Instance.new("ImageLabel")
+    img.BackgroundTransparency = 1
+    img.AnchorPoint = Vector2.new(0.5, 0.5)
+    img.Position    = UDim2.fromScale(0.5, 0.5)
+    img.ScaleType   = Enum.ScaleType.Fit
+    img.ZIndex      = 10
+    img.Visible     = false
+    img.Parent      = gui
+
+    _chGui = gui
+    _chImg = img
 end
 
-local function teardownSpinCrosshair()
-    _spinReady = false
-    for i = 1, 5 do
-        if _spinLines[i] then pcall(function() _spinLines[i]:Remove() end); _spinLines[i] = nil end
-    end
+local _chSize = nil
+
+local function applyCrosshair()
+    if not _chImg then return end
+    local style  = STATE.CrosshairStyle or "emoji"
+    local scale  = (STATE.CrosshairSize or 100) / 100
+    local px     = math.floor((CROSSHAIR_SIZE[style] or 48) * scale)
+    _chStyle = style; _chSize = STATE.CrosshairSize
+    _chImg.Image = CROSSHAIR_DECALS[style] or CROSSHAIR_DECALS.emoji
+    _chImg.Size  = UDim2.fromOffset(px, px)
 end
+
+local function teardownCrosshair()
+    if _chGui then pcall(function() _chGui:Destroy() end) end
+    _chGui = nil; _chImg = nil; _chStyle = nil
+    _crosshairAngle = 0
+end
+
+-- Build the GUI immediately at script load (outside any RunService callback)
+buildCrosshairGui()
 
 -- ─── Fly ─────────────────────────────────────────────────────────────────────
 
@@ -1023,20 +1146,30 @@ end
 
 -- ─── Consolidated RunService loops ───────────────────────────────────────────
 
-local _prevFastWeaps         = STATE.FastWeaps
+-- All _prev* start as a sentinel (empty table) so first-tick comparison always fires,
+-- regardless of what loadConfig() set in STATE. This ensures saved-on features activate
+-- immediately without needing a retoggle.
+local _UNSET = {}
+
+local _prevFireRateEnabled   = _UNSET
+local _prevFireRate          = _UNSET
 local _fastApplied           = false
-local _prevWalkSpeedEnabled  = STATE.WalkSpeedEnabled
-local _prevJumpPowerEnabled  = STATE.JumpPowerEnabled
+local _prevWalkSpeedEnabled  = _UNSET
+local _prevJumpPowerEnabled  = _UNSET
 local _prevNoclip            = false
 local _noclipAccum           = 0
 local _origFOV               = Camera.FieldOfView
-local _prevMapVisuals        = nil  -- nil forces apply on first tick
-local _prevMapPreset         = nil
-local _prevHighSat           = nil
+local _prevCameraFOVEnabled  = _UNSET
+local _prevMapVisuals        = _UNSET
+local _prevMapPreset         = _UNSET
+local _prevHighSat           = _UNSET
 local _highSatCC             = nil
-local _prevStream            = false
+local _prevStream            = _UNSET
 local _streamPatched         = {}
 local _streamConns           = {}
+local _prevMapColorEnabled   = _UNSET  -- stores sig string covering all map overlay settings
+local _arenaOrigColors       = {}
+local _arenaColorConn        = nil
 
 local function enableStreaming()
     local name  = LocalPlayer.Name
@@ -1106,17 +1239,12 @@ RunService.Heartbeat:Connect(function(dt)
         _trajAccum = _trajAccum % TRAJ_INTERVAL
         if STATE.AimTrajectory then
             for player, data in pairs(TRAJ_DATA) do
-                local target
-                if player == LocalPlayer then
-                    target = Camera.CFrame.Position + Camera.CFrame.LookVector * TRAJ_LOOK_DIST
-                else
-                    local char = getCharacter(player)
-                    local head = char and (char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart"))
-                    if head then target = head.Position + head.CFrame.LookVector * TRAJ_LOOK_DIST end
-                end
-                if target then
+                if player == LocalPlayer or not isEnemy(player) then continue end
+                local char = getCharacter(player)
+                local root = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head"))
+                if root then
                     local pts = data.points
-                    pts[#pts + 1] = target
+                    pts[#pts + 1] = root.Position
                     while #pts > TRAJ_MAX_PTS do table.remove(pts, 1) end
                 end
             end
@@ -1124,16 +1252,160 @@ RunService.Heartbeat:Connect(function(dt)
     end
 end)
 
+local function isMapModel(obj)
+    return obj:IsA("Model") and obj:FindFirstChild("Spectate") and obj:FindFirstChild("Primary")
+end
+
+local function findParentMapModel(obj)
+    local cur = obj.Parent
+    while cur and cur ~= workspace do
+        if isMapModel(cur) then return cur end
+        cur = cur.Parent
+    end
+end
+
+local function getMapColor()
+    return Color3.fromRGB(STATE.MapColorR, STATE.MapColorG, STATE.MapColorB)
+end
+
+-- ─── Map Dome ────────────────────────────────────────────────────────────────
+
+local DOME_WALL_TAG  = "RBDomeWall"
+local _domeWalls     = {}
+local _coloredModels = {}  -- [model] = true, tracks which models already have dome+color applied
+
+local DOME_MATERIALS = {
+    "Neon","SmoothPlastic","Glass","ForceField","Metal",
+    "Wood","Marble","Granite","Fabric","Ice",
+}
+local DOME_MATERIAL_MAP = {}
+for _, name in ipairs(DOME_MATERIALS) do
+    DOME_MATERIAL_MAP[name] = Enum.Material[name]
+end
+
+local function getDomeColor()
+    return Color3.fromRGB(STATE.MapDomeColorR, STATE.MapDomeColorG, STATE.MapDomeColorB)
+end
+
+local function spawnDomeWallsForModel(model)
+    local color        = getDomeColor()
+    local mat          = DOME_MATERIAL_MAP[STATE.MapDomeMaterial] or Enum.Material.Neon
+    local transparency = STATE.MapDomeTransparency / 100
+    local SIZE = Vector3.new(400, 400, 6)
+    local DIST = 200
+    local cf   = model:GetPivot()
+    local transforms = {
+        cf * CFrame.new(0,    0,    DIST),
+        cf * CFrame.new(0,    0,   -DIST),
+        cf * CFrame.new(DIST,  0,   0) * CFrame.Angles(0, math.rad(90), 0),
+        cf * CFrame.new(-DIST, 0,   0) * CFrame.Angles(0, math.rad(90), 0),
+        cf * CFrame.new(0,    DIST, 0) * CFrame.Angles(math.rad(90), 0, 0),
+    }
+    for _, wallCF in ipairs(transforms) do
+        local wall = Instance.new("Part")
+        wall.Name         = DOME_WALL_TAG
+        wall.Size         = SIZE
+        wall.Color        = color
+        wall.Material     = mat
+        wall.Anchored     = true
+        wall.CanCollide   = false
+        wall.CastShadow   = false
+        wall.Transparency = transparency
+        wall.CFrame       = wallCF
+        wall.Parent       = workspace
+        _domeWalls[#_domeWalls + 1] = wall
+    end
+end
+
+local function colorModelParts(model)
+    local newColor = getMapColor()
+    for _, part in ipairs(model:GetDescendants()) do
+        if part:IsA("BasePart") then
+            if not _arenaOrigColors[part] then _arenaOrigColors[part] = part.Color end
+            pcall(function() part.Color = newColor end)
+        end
+    end
+end
+
+-- Apply color and/or dome to a single qualifying model we haven't processed yet.
+local function applyToModel(model)
+    if _coloredModels[model] then return end
+    _coloredModels[model] = true
+    if STATE.MapColorEnabled then colorModelParts(model) end
+    if STATE.MapDome        then spawnDomeWallsForModel(model) end
+end
+
+-- Scan all existing workspace descendants for qualifying models.
+local function scanWorkspace()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if isMapModel(obj) then applyToModel(obj) end
+    end
+end
+
+local function clearDomeWalls()
+    for _, w in ipairs(_domeWalls) do pcall(function() w:Destroy() end) end
+    _domeWalls = {}
+end
+
+local function disableArenaColor()
+    if _arenaColorConn then _arenaColorConn:Disconnect(); _arenaColorConn = nil end
+    for part, origColor in pairs(_arenaOrigColors) do
+        pcall(function() part.Color = origColor end)
+    end
+    _arenaOrigColors = {}
+end
+
+
+
+-- Full teardown: restores original colors, destroys dome walls, clears tracking.
+local function teardownMapOverlays()
+    disableArenaColor()
+    clearDomeWalls()
+    _coloredModels = {}
+end
+
+-- Re-applies everything from scratch (called when settings change while enabled).
+local function rebuildMapOverlays()
+    teardownMapOverlays()
+    scanWorkspace()
+end
+
+-- Called once to wire up the DescendantAdded watcher for late-streaming models.
+local function startMapWatcher()
+    if _arenaColorConn then _arenaColorConn:Disconnect() end
+    _arenaColorConn = workspace.DescendantAdded:Connect(function(obj)
+        if not (STATE.MapColorEnabled or STATE.MapDome or STATE.RainbowMap) then return end
+        -- A newly added Model won't have its children yet; defer one frame so
+        -- isMapModel (which checks for Spectate + Primary children) can succeed.
+        if obj:IsA("Model") then
+            task.defer(function()
+                if obj.Parent and isMapModel(obj) then applyToModel(obj) end
+            end)
+        elseif obj:IsA("BasePart") then
+            -- Part added inside an already-qualified model that we haven't seen yet
+            task.defer(function()
+                local model = findParentMapModel(obj)
+                if model then applyToModel(model) end
+            end)
+        end
+    end)
+end
+
+local function stopMapWatcher()
+    if _arenaColorConn then _arenaColorConn:Disconnect(); _arenaColorConn = nil end
+end
+
 RunService.Stepped:Connect(function(_, dt)
     Camera = workspace.CurrentCamera
-    if not STATE.Master then return end
 
-    if STATE.FastWeaps ~= _prevFastWeaps then
-        _prevFastWeaps = STATE.FastWeaps; _fastApplied = false
-        if not STATE.FastWeaps then restoreItemLibrary() end
-    end
-    if STATE.FastWeaps and not _fastApplied and type(ItemLibrary) == "table" then
-        applyFastWeapons(); _fastApplied = true
+    -- ── State-change detection runs unconditionally (not gated by Master) ──
+    -- This ensures features saved as enabled in config activate on first tick,
+    -- and toggling a feature while Master is off still takes effect.
+
+    if STATE.FireRateEnabled ~= _prevFireRateEnabled or STATE.FireRate ~= _prevFireRate then
+        _prevFireRateEnabled = STATE.FireRateEnabled; _prevFireRate = STATE.FireRate
+        _fastApplied = false
+        if not STATE.FireRateEnabled then restoreItemLibrary() end
     end
 
     if STATE.WalkSpeedEnabled ~= _prevWalkSpeedEnabled then
@@ -1151,16 +1423,10 @@ RunService.Stepped:Connect(function(_, dt)
         end
     end
 
-    if STATE.WalkSpeedEnabled and LocalPlayer.Character then
-        local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-        if hum then hum.WalkSpeed = STATE.WalkSpeed end
-    end
-
-    if STATE.NoRecoil and LocalPlayer.Character then
-        local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
-        if tool then
-            local rv = tool:FindFirstChild("Recoil", true)
-            if rv then pcall(function() rv.Value = 0 end) end
+    if STATE.CameraFOVEnabled ~= _prevCameraFOVEnabled then
+        _prevCameraFOVEnabled = STATE.CameraFOVEnabled
+        if not STATE.CameraFOVEnabled then
+            Camera.FieldOfView = _origFOV
         end
     end
 
@@ -1189,9 +1455,50 @@ RunService.Stepped:Connect(function(_, dt)
         end
     end
 
+    -- Compute a sig covering all map overlay settings.
+    -- Any change (toggle, color, material, transparency) triggers a full rebuild.
+    local anyOverlay = STATE.MapColorEnabled or STATE.MapDome or STATE.RainbowMap
+    local sig = tostring(anyOverlay)
+        .. tostring(STATE.MapColorEnabled) .. tostring(STATE.MapColorR) .. tostring(STATE.MapColorG) .. tostring(STATE.MapColorB)
+        .. tostring(STATE.MapDome) .. tostring(STATE.MapDomeMaterial)
+        .. tostring(STATE.MapDomeColorR) .. tostring(STATE.MapDomeColorG) .. tostring(STATE.MapDomeColorB)
+        .. tostring(STATE.MapDomeTransparency)
+        .. tostring(STATE.RainbowMap)
+
+    if sig ~= _prevMapColorEnabled then
+        _prevMapColorEnabled = sig
+        if anyOverlay then
+            rebuildMapOverlays()
+            startMapWatcher()
+        else
+            teardownMapOverlays()
+            stopMapWatcher()
+        end
+    end
+
     if STATE.StreamingMode ~= _prevStream then
         _prevStream = STATE.StreamingMode
         if STATE.StreamingMode then enableStreaming() else disableStreaming() end
+    end
+
+    -- ── Per-frame active work — gated by Master ──
+    if not STATE.Master then return end
+
+    if STATE.FireRateEnabled and not _fastApplied and type(ItemLibrary) == "table" then
+        applyFastWeapons(); _fastApplied = true
+    end
+
+    if STATE.WalkSpeedEnabled and LocalPlayer.Character then
+        local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if hum then hum.WalkSpeed = STATE.WalkSpeed end
+    end
+
+    if STATE.NoRecoil and LocalPlayer.Character then
+        local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
+        if tool then
+            local rv = tool:FindFirstChild("Recoil", true)
+            if rv then pcall(function() rv.Value = 0 end) end
+        end
     end
 
     local wantNoclip = STATE.Noclip
@@ -1218,7 +1525,24 @@ RunService.Stepped:Connect(function(_, dt)
 end)
 
 RunService.RenderStepped:Connect(function(dt)
-    if STATE.RainbowVisuals then _rbColor = getRainbow(0) end
+    if STATE.RainbowVisuals or STATE.RainbowMap then _rbColor = getRainbow(0) end
+
+    if STATE.RainbowMap then
+        -- drive arena parts
+        if STATE.MapColorEnabled then
+            for part in pairs(_arenaOrigColors) do
+                pcall(function() part.Color = _rbColor end)
+            end
+        end
+        -- drive dome walls
+        if STATE.MapDome then
+            local mat = DOME_MATERIAL_MAP[STATE.MapDomeMaterial] or Enum.Material.Neon
+            local transp = STATE.MapDomeTransparency / 100
+            for _, w in ipairs(_domeWalls) do
+                pcall(function() w.Color = _rbColor; w.Material = mat; w.Transparency = transp end)
+            end
+        end
+    end
 
     if FOVCircle then
         FOVCircle.Radius   = STATE.AimFOV
@@ -1233,7 +1557,9 @@ RunService.RenderStepped:Connect(function(dt)
 
     if STATE.Master then runTriggerbot() end
 
-    Camera.FieldOfView = STATE.CameraFOVEnabled and STATE.CameraFOV or _origFOV
+    if STATE.CameraFOVEnabled then
+        Camera.FieldOfView = STATE.CameraFOV
+    end
 
     if TargetLineDrawing then
         if STATE.TargetLine and STATE.Master then
@@ -1247,7 +1573,7 @@ RunService.RenderStepped:Connect(function(dt)
                     if onScreen and depth > 0 and getDistance(lineTarget) <= 400 then
                         TargetLineDrawing.From    = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
                         TargetLineDrawing.To      = sp
-                        TargetLineDrawing.Color   = STATE.RainbowVisuals and _rbColor or Color3.fromRGB(255,50,50)
+                        TargetLineDrawing.Color   = STATE.RainbowVisuals and _rbColor or Color3.fromRGB(STATE.TargetLineColorR, STATE.TargetLineColorG, STATE.TargetLineColorB)
                         TargetLineDrawing.Visible = true
                     else
                         TargetLineDrawing.Visible = false
@@ -1285,7 +1611,7 @@ RunService.RenderStepped:Connect(function(dt)
         local lineIdx   = 0
         if STATE.AimTrajectory and STATE.Master then
             for player, data in pairs(TRAJ_DATA) do
-                if player ~= LocalPlayer and not isEnemy(player) then continue end
+                if not isEnemy(player) then continue end
                 local pts = data.points
                 local n   = #pts
                 if n < 4 then continue end
@@ -1317,26 +1643,21 @@ RunService.RenderStepped:Connect(function(dt)
         TRAJ_LINES_USED = lineIdx
     end
 
-    if STATE.SpinCrosshair and STATE.Master then
-        if not _spinReady then setupSpinCrosshair() end
-        _spinAngle = (_spinAngle + SPIN_SPEED * dt) % 360
-        local cx, cy  = Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2
-        local color   = visualColor(255, 255, 255)
-        for i = 1, 4 do
-            local angle = math.rad(_spinAngle + (i-1)*90)
-            local ln    = _spinLines[i]
-            if ln then
-                ln.From    = Vector2.new(cx + math.cos(angle)*6,  cy + math.sin(angle)*6)
-                ln.To      = Vector2.new(cx + math.cos(angle)*20, cy + math.sin(angle)*20)
-                ln.Color   = color; ln.Visible = true
+    if _chImg then
+        local want = STATE.CrosshairEnabled and STATE.Master
+        if want then
+            local style = STATE.CrosshairStyle or "emoji"
+            if style ~= _chStyle or STATE.CrosshairSize ~= _chSize then applyCrosshair() end
+            if STATE.CrosshairSpin then
+                _crosshairAngle = (_crosshairAngle + SPIN_SPEED * dt) % 360
+            else
+                _crosshairAngle = 0
             end
+            _chImg.Rotation = _crosshairAngle
+            _chImg.Visible  = true
+        else
+            _chImg.Visible = false
         end
-        if _spinLines[5] then
-            _spinLines[5].Position = Vector2.new(cx, cy)
-            _spinLines[5].Color    = color; _spinLines[5].Visible = true
-        end
-    elseif _spinReady then
-        teardownSpinCrosshair()
     end
 
     updateFly()
@@ -1394,14 +1715,16 @@ end
 
 local function stopScript()
     for _, key in ipairs({ "Master","Aimbot","AimActive","SilentAim","Triggerbot","AutoClick",
-        "ESP","FastWeaps","WalkSpeedEnabled","JumpPowerEnabled","InfJump","NoRecoil",
-        "UnlockSkins","ChamsESP","AimTrajectory","SpinCrosshair",
+        "ESP","FireRateEnabled","WalkSpeedEnabled","JumpPowerEnabled","InfJump","NoRecoil",
+        "UnlockSkins","ChamsESP","AimTrajectory","CrosshairEnabled",
         "MapVisuals","Fly","Noclip" }) do
         STATE[key] = false
     end
     if _highSatCC then pcall(function() _highSatCC:Destroy() end); _highSatCC = nil end
+    teardownMapOverlays()
+    stopMapWatcher()
     for _, ln in ipairs(TRAJ_LINE_POOL) do pcall(function() ln.Visible = false end) end
-    teardownSpinCrosshair()
+    teardownCrosshair()
     restoreItemLibrary()
     if LocalPlayer.Character then
         local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
@@ -1489,6 +1812,7 @@ do
     sli(R, "Smoothness",   "AimSmoothness",  1, 20,   0)
     sli(R, "FOV Radius",   "AimFOV",         50, 600, 0)
     R:AddDivider()
+    drp(R, "Target Part",  "AimPart", {"Head","HumanoidRootPart","UpperTorso","LowerTorso","LeftUpperArm","RightUpperArm","LeftUpperLeg","RightUpperLeg"})
     tog(R, "Visible Only", "AimVisibleOnly")
     tog(R, "Humanize",     "AimHumanize")
     sli(R, "Max Distance", "AimMaxDistance", 0, 2000, 0)
@@ -1499,51 +1823,61 @@ end
 
 do
     local L = Tabs.Weapons:AddLeftGroupbox("Modifications")
-    tog(L, "Fast Fire",  "FastWeaps")
+    tog(L, "Fire Rate",  "FireRateEnabled")
+    sli(L, "Fire Rate Value", "FireRate", 0.001, 1, 3)
     tog(L, "No Recoil",  "NoRecoil")
     tog(L, "Auto Click", "AutoClick")
 end
 
 do
     local L = Tabs.Visuals:AddLeftGroupbox("ESP")
-    tog(L, "ESP Enabled",   "ESP")
-    sli(L, "Max Range",     "ESPMaxDistance", 50, 500, 0)
-    clr(L, "ESP Color",     "ESPColor",  {"ESPColorR","ESPColorG","ESPColorB"})
+    tog(L, "ESP Enabled",  "ESP")
+    sli(L, "Max Range",    "ESPMaxDistance", 50, 500, 0)
     L:AddDivider()
-    drp(L, "Box Style",     "ESPBoxStyle", {"None","Full Box","Corner Box"})
-    tog(L, "Box Fill",      "ESPBoxFill")
-    tog(L, "Tracers",       "ESPTracer")
-    tog(L, "Names",         "ESPName")
-    tog(L, "Distance",      "ESPDistance")
-    tog(L, "Level",         "ESPLevel")
-    tog(L, "Win Streak",    "ESPWinStreak")
-    tog(L, "Health Bars",   "ESPHealthBar")
-    tog(L, "Skeleton",      "ESPSkeleton")
+    drp(L, "Box Style",    "ESPBoxStyle", {"None","Full Box","Corner Box"})
+    tog(L, "Box Fill",     "ESPBoxFill")
+    tog(L, "Tracers",      "ESPTracer")
+    tog(L, "Names",        "ESPName")
+    tog(L, "Distance",     "ESPDistance")
+    tog(L, "Level",        "ESPLevel")
+    tog(L, "Win Streak",   "ESPWinStreak")
+    tog(L, "Health Bars",  "ESPHealthBar")
+    tog(L, "Skeleton",     "ESPSkeleton")
     L:AddDivider()
-    drp(L, "Text Font", "ESPFont", {"UI","Mono","Code","Legacy","Antique","Gotham"})
-    sli(L, "Text Size", "ESPTextSize", 8, 24, 0)
+    drp(L, "Text Font",    "ESPFont", {"UI","System","Plex","Monospace"})
+    sli(L, "Text Size",    "ESPTextSize", 8, 24, 0)
 
     local L2 = Tabs.Visuals:AddLeftGroupbox("Camera")
-    tog(L2, "Custom FOV",   "CameraFOVEnabled")
+    tog(L2, "Custom FOV",    "CameraFOVEnabled")
     sli(L2, "Field of View", "CameraFOV", 30, 120, 0)
 
-    local R = Tabs.Visuals:AddRightGroupbox("Chams")
-    tog(R, "Chams ESP",    "ChamsESP")
-    clr(R, "Chams Color",  "ChamsColor", {"ChamsR","ChamsG","ChamsB"})
+    local R = Tabs.Visuals:AddRightGroupbox("ESP Colors")
+    clr(R, "General / Health",  "ESPColor",       {"ESPColorR",       "ESPColorG",       "ESPColorB"})
+    clr(R, "Box / Corner",      "ESPBoxColor",     {"ESPBoxColorR",    "ESPBoxColorG",    "ESPBoxColorB"})
+    clr(R, "Tracers",           "ESPTracerColor",  {"ESPTracerColorR", "ESPTracerColorG", "ESPTracerColorB"})
+    clr(R, "Name",              "ESPNameColor",    {"ESPNameColorR",   "ESPNameColorG",   "ESPNameColorB"})
+    clr(R, "Target Line",       "TargetLineColor", {"TargetLineColorR","TargetLineColorG","TargetLineColorB"})
 
-    local R2 = Tabs.Visuals:AddRightGroupbox("Bullet Effects")
-    tog(R2, "Bullet Tracers",  "BulletTracers")
-    clr(R2, "Tracer Color",    "TracerColor",  {"TracerR","TracerG","TracerB"})
-    tog(R2, "Impact Markers",  "ImpactMarkers")
-    clr(R2, "Impact Color",    "ImpactColor",  {"ImpactR","ImpactG","ImpactB"})
+    local R2 = Tabs.Visuals:AddRightGroupbox("Chams")
+    tog(R2, "Chams ESP",    "ChamsESP")
+    clr(R2, "Chams Color",  "ChamsColor", {"ChamsR","ChamsG","ChamsB"})
 
-    local R3 = Tabs.Visuals:AddRightGroupbox("Overlays")
-    tog(R3, "Aim Trajectory",    "AimTrajectory")
-    clr(R3, "Trajectory Color",  "AimTrajColor", {"AimTrajR","AimTrajG","AimTrajB"})
-    R3:AddDivider()
-    tog(R3, "Rainbow Visuals",   "RainbowVisuals")
-    tog(R3, "Spinning Crosshair","SpinCrosshair")
-    tog(R3, "Target Line",       "TargetLine")
+    local R3 = Tabs.Visuals:AddRightGroupbox("Bullet Effects")
+    tog(R3, "Bullet Tracers",  "BulletTracers")
+    clr(R3, "Tracer Color",    "TracerColor",  {"TracerR","TracerG","TracerB"})
+    tog(R3, "Impact Markers",  "ImpactMarkers")
+    clr(R3, "Impact Color",    "ImpactColor",  {"ImpactR","ImpactG","ImpactB"})
+
+    local R4 = Tabs.Visuals:AddRightGroupbox("Overlays")
+    tog(R4, "Aim Trajectory",    "AimTrajectory")
+    clr(R4, "Trajectory Color",  "AimTrajColor", {"AimTrajR","AimTrajG","AimTrajB"})
+    R4:AddDivider()
+    tog(R4, "Rainbow Visuals",   "RainbowVisuals")
+    tog(R4, "Crosshair",         "CrosshairEnabled")
+    drp(R4, "Crosshair Style",   "CrosshairStyle",  CROSSHAIR_STYLES)
+    sli(R4, "Crosshair Scale %", "CrosshairSize",   25, 300, 0)
+    tog(R4, "Spin Crosshair",    "CrosshairSpin")
+    tog(R4, "Target Line",       "TargetLine")
 end
 
 do
@@ -1570,6 +1904,17 @@ do
     drp(L, "Preset", "MapVisualsPreset",
         {"Arctic Night","Blood Moon","Neon Void","Toxic Wasteland","Heaven","Inferno","Golden Hour","Matrix"})
     tog(L, "High Saturation", "HighSaturation")
+
+    local R = Tabs.World:AddRightGroupbox("Map Color & Dome")
+    tog(R, "Rainbow Map",    "RainbowMap")
+    R:AddDivider()
+    tog(R, "Map Color",      "MapColorEnabled")
+    clr(R, "Color",          "MapColor",    {"MapColorR","MapColorG","MapColorB"})
+    R:AddDivider()
+    tog(R, "Dome Walls",     "MapDome")
+    drp(R, "Material",       "MapDomeMaterial", DOME_MATERIALS)
+    clr(R, "Dome Color",     "DomeColor",   {"MapDomeColorR","MapDomeColorG","MapDomeColorB"})
+    sli(R, "Transparency",   "MapDomeTransparency", 0, 100, 0)
 end
 
 do
