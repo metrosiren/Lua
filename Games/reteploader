@@ -1,0 +1,256 @@
+-- =============================================================================
+-- [ CONFIGURATION BLOCK ]
+-- Modernized Sunset Theme for Retep Scripts
+-- =============================================================================
+local CONFIG = {
+    DiscordLink     = "dsc.gg/retepscripts",
+    TitleText       = "Retep Scripts 🌴",
+    SubTitleText    = "Tuffest scripting hub. Join our server below.",
+    
+    -- Window Sizing (Sleek, compact, high density)
+    WindowWidth     = 360,
+    WindowHeight    = 185,
+    PaddingLeft     = 20,
+    CornerRadius    = 8,
+    
+    -- Color Palette
+    ColorBackground = Color3.fromRGB(18, 14, 20),      -- Deep obsidian grape background
+    ColorContainer  = Color3.fromRGB(28, 22, 32),      -- Slightly lighter warm plum container
+    ColorBorder     = Color3.fromRGB(45, 35, 50),      -- Dark plum divider borders
+    
+    ColorTextMain   = Color3.fromRGB(255, 255, 255),  -- Bright header text
+    ColorTextMuted  = Color3.fromRGB(175, 160, 180),  -- Secondary text label
+    ColorTextLink   = Color3.fromRGB(255, 140, 180),  -- Warm gold/pink color
+    
+    TweenTime       = 0.3,
+    TweenStyle      = Enum.EasingStyle.Quart,
+    TweenDirection  = Enum.EasingDirection.Out
+}
+-- =============================================================================
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+
+local TWEEN = TweenInfo.new(CONFIG.TweenTime, CONFIG.TweenStyle, CONFIG.TweenDirection)
+
+local guiParent = pcall(function() return CoreGui.Name end) and CoreGui or LocalPlayer:WaitForChild("PlayerGui")
+local screen = Instance.new("ScreenGui", guiParent)
+screen.Name = "RetepUI"
+screen.ResetOnSpawn = false
+screen.IgnoreGuiInset = true
+
+-- Background Audio (New Audio ID loop)
+local audio = Instance.new("Sound")
+audio.Name = "RetepBGM"
+audio.SoundId = "rbxassetid://129433825059467"
+audio.Looped = true
+audio.Volume = 0.5
+audio.Parent = screen
+audio:Play()
+
+-- === Detect Current Executor ===
+local function getExecutorName()
+    local name, version = "Unknown", ""
+    if identifyexecutor then
+        pcall(function() name, version = identifyexecutor() end)
+    elseif getexecutorname then
+        pcall(function() name = getexecutorname() end)
+    end
+    
+    if version and version ~= "" then
+        return tostring(name) .. " (" .. tostring(version) .. ")"
+    end
+    return tostring(name)
+end
+
+-- === Main Window ===
+local win = Instance.new("Frame", screen)
+win.Size = UDim2.new(0, CONFIG.WindowWidth, 0, CONFIG.WindowHeight) 
+win.Position = UDim2.new(0.5, -(CONFIG.WindowWidth/2), 0.5, -(CONFIG.WindowHeight/2))
+win.BackgroundColor3 = CONFIG.ColorBackground
+win.BorderSizePixel = 0
+win.Active = true
+win.ClipsDescendants = true 
+
+local winCorner = Instance.new("UICorner", win)
+winCorner.CornerRadius = UDim.new(0, CONFIG.CornerRadius)
+
+-- Modern Sunset Outer Border Stroke
+local stroke = Instance.new("UIStroke", win)
+stroke.Thickness = 1.5
+stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+
+local borderGradient = Instance.new("UIGradient", stroke)
+borderGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 80, 120)),   -- Sunset Pink
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 140, 80)), -- Sunset Orange
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 200, 80))    -- Sunset Gold
+})
+
+-- === Header Elements ===
+local title = Instance.new("TextLabel", win)
+title.Size = UDim2.new(1, -100, 0, 24)
+title.Position = UDim2.new(0, CONFIG.PaddingLeft, 0, 16)
+title.BackgroundTransparency = 1
+title.Text = CONFIG.TitleText
+title.TextColor3 = CONFIG.ColorTextMain
+title.Font = Enum.Font.GothamBold
+title.TextSize = 16
+title.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Subtle Close Button
+local closeBtn = Instance.new("TextButton", win)
+closeBtn.Size = UDim2.new(0, 20, 0, 24)
+closeBtn.Position = UDim2.new(1, -CONFIG.PaddingLeft, 0, 16)
+closeBtn.BackgroundTransparency = 1
+closeBtn.Text = "×"
+closeBtn.TextColor3 = CONFIG.ColorTextMuted
+closeBtn.Font = Enum.Font.GothamMedium
+closeBtn.TextSize = 18
+closeBtn.AutoButtonColor = false
+
+local sub = Instance.new("TextLabel", win)
+sub.Size = UDim2.new(1, -(CONFIG.PaddingLeft * 2), 0, 16)
+sub.Position = UDim2.new(0, CONFIG.PaddingLeft, 0, 38)
+sub.BackgroundTransparency = 1
+sub.Text = CONFIG.SubTitleText
+sub.TextColor3 = CONFIG.ColorTextMuted
+sub.Font = Enum.Font.Gotham
+sub.TextSize = 12
+sub.TextXAlignment = Enum.TextXAlignment.Left
+
+-- === Link Box (Interactive Textbox) ===
+local linkBox = Instance.new("TextBox", win)
+linkBox.Size = UDim2.new(1, -(CONFIG.PaddingLeft * 2), 0, 32)
+linkBox.Position = UDim2.new(0, CONFIG.PaddingLeft, 0, 68)
+linkBox.BackgroundColor3 = CONFIG.ColorContainer
+linkBox.BorderSizePixel = 0
+linkBox.Text = "https://" .. CONFIG.DiscordLink
+linkBox.TextColor3 = CONFIG.ColorTextLink
+linkBox.Font = Enum.Font.Code
+linkBox.TextSize = 12
+linkBox.ClearTextOnFocus = false
+linkBox.TextEditable = false -- Selectable but not typing-overeditable
+
+local boxCorner = Instance.new("UICorner", linkBox)
+boxCorner.CornerRadius = UDim.new(0, 6)
+
+local boxStroke = Instance.new("UIStroke", linkBox)
+boxStroke.Color = CONFIG.ColorBorder
+boxStroke.Thickness = 1
+boxStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+
+-- === Copy Button below Box ===
+local copyBtn = Instance.new("TextButton", win)
+copyBtn.Size = UDim2.new(1, -(CONFIG.PaddingLeft * 2), 0, 32)
+copyBtn.Position = UDim2.new(0, CONFIG.PaddingLeft, 0, 110)
+copyBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+copyBtn.BorderSizePixel = 0
+copyBtn.Text = "Copy Server Link"
+copyBtn.TextColor3 = Color3.fromRGB(20, 15, 25)
+copyBtn.Font = Enum.Font.GothamBold
+copyBtn.TextSize = 12
+copyBtn.AutoButtonColor = false
+
+local btnCorner = Instance.new("UICorner", copyBtn)
+btnCorner.CornerRadius = UDim.new(0, 6)
+
+local btnGradient = Instance.new("UIGradient", copyBtn)
+btnGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 90, 120)),  -- Modern Pink
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 160, 90))   -- Modern Orange-Gold
+})
+
+-- === Notifications Framework ===
+local function showNotif(msg)
+    local notif = Instance.new("Frame", screen)
+    notif.Size = UDim2.new(0, 220, 0, 36)
+    notif.Position = UDim2.new(0.5, -110, 1, -65)
+    notif.BackgroundColor3 = CONFIG.ColorContainer
+    notif.BorderSizePixel = 0
+    notif.BackgroundTransparency = 1
+
+    local notifCorner = Instance.new("UICorner", notif)
+    notifCorner.CornerRadius = UDim.new(0, 6)
+
+    local ns = Instance.new("UIStroke", notif)
+    ns.Color = CONFIG.ColorBorder
+    ns.Thickness = 1
+    ns.Transparency = 1
+
+    local nl = Instance.new("TextLabel", notif)
+    nl.Size = UDim2.new(1, 0, 1, 0)
+    nl.BackgroundTransparency = 1
+    nl.Text = msg
+    nl.TextColor3 = CONFIG.ColorTextMain
+    nl.Font = Enum.Font.GothamMedium
+    nl.TextSize = 11
+    nl.TextTransparency = 1
+
+    TweenService:Create(notif, TWEEN, {BackgroundTransparency = 0}):Play()
+    TweenService:Create(ns, TWEEN, {Transparency = 0}):Play()
+    TweenService:Create(nl, TWEEN, {TextTransparency = 0}):Play()
+
+    task.delay(2.5, function()
+        local tw = TweenService:Create(notif, TWEEN, {BackgroundTransparency = 1})
+        TweenService:Create(ns, TWEEN, {Transparency = 1}):Play()
+        TweenService:Create(nl, TWEEN, {TextTransparency = 1}):Play()
+        tw:Play()
+        tw.Completed:Wait()
+        notif:Destroy()
+    end)
+end
+
+-- === Action Listeners ===
+closeBtn.MouseEnter:Connect(function()
+    TweenService:Create(closeBtn, TWEEN, {TextColor3 = Color3.fromRGB(255, 90, 100)}):Play()
+end)
+closeBtn.MouseLeave:Connect(function()
+    TweenService:Create(closeBtn, TWEEN, {TextColor3 = CONFIG.ColorTextMuted}):Play()
+end)
+closeBtn.MouseButton1Click:Connect(function()
+    audio:Stop()
+    screen:Destroy()
+end)
+
+copyBtn.MouseEnter:Connect(function()
+    TweenService:Create(copyBtn, TWEEN, {Size = UDim2.new(1, -(CONFIG.PaddingLeft * 2) + 6, 0, 34), Position = UDim2.new(0, CONFIG.PaddingLeft - 3, 0, 109)}):Play()
+end)
+copyBtn.MouseLeave:Connect(function()
+    TweenService:Create(copyBtn, TWEEN, {Size = UDim2.new(1, -(CONFIG.PaddingLeft * 2), 0, 32), Position = UDim2.new(0, CONFIG.PaddingLeft, 0, 110)}):Play()
+end)
+copyBtn.MouseButton1Click:Connect(function()
+    pcall(function() setclipboard("https://" .. CONFIG.DiscordLink) end)
+    copyBtn.Text = "Copied Server Link!"
+    showNotif("Saved link to system clipboard")
+    task.delay(2, function()
+        copyBtn.Text = "Copy Server Link"
+    end)
+end)
+
+-- === Window Drag Mechanics ===
+local dragging, dragStart, startPos, dragInput
+win.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = win.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then dragging = false end
+        end)
+    end
+end)
+
+win.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then dragInput = input end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and input == dragInput then
+        local d = input.Position - dragStart
+        win.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+    end
+end)
