@@ -1,0 +1,955 @@
+-- Advanced Skin/Wrap/Charm/Finisher Unlocker v2.3
+-- FINISHER FORCED DETECTION
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+
+-- Constants
+local CONFIG_FILE = "rivals_skinchanger_config.json"
+local COSMETIC_TYPES = {"Skin", "Wrap", "Charm", "Dance", "Emote", "Sticker", "Finisher", "Execution"}
+local SAVE_DELAY = 0.5
+
+-- State
+local equippedCosmetics = {}
+local favoritedCosmetics = {}
+local buildingWeapon = nil
+local currentWeapon = nil
+local saveLock = false
+local initialized = false
+local finisherPatched = false
+local selectedFinisher = nil
+local finisherDetectionAttempts = 0
+
+-- Service references
+local PlayerScripts = LocalPlayer.PlayerScripts
+local Controllers = PlayerScripts:FindFirstChild("Controllers")
+local Modules = ReplicatedStorage:FindFirstChild("Modules")
+
+-- Module references
+local EnumLibrary, CosmeticLibrary, ItemLibrary, PlayerDataController
+local FighterController
+
+-- Initialize modules with proper error handling
+local function initializeModules()
+    local success, err = pcall(function()
+        if Modules then
+            EnumLibrary = require(Modules:WaitForChild("EnumLibrary", 5))
+            CosmeticLibrary = require(Modules:WaitForChild("CosmeticLibrary", 5))
+            ItemLibrary = require(Modules:WaitForChild("ItemLibrary", 5))
+        end
+        
+        if Controllers then
+            PlayerDataController = require(Controllers:WaitForChild("PlayerDataController", 5))
+            FighterController = require(Controllers:FindFirstChild("FighterController") or Controllers:WaitForChild("FighterController", 5))
+        end
+        
+        if EnumLibrary and EnumLibrary.WaitForEnumBuilder then
+            EnumLibrary:WaitForEnumBuilder()
+        end
+    end)
+    
+    if not success then
+        warn("Failed to initialize modules:", err)
+        return false
+    end
+    return true
+end
+
+-- Cosmetic creation helper
+local function createCosmetic(name, cosmeticType, options)
+    if not CosmeticLibrary or not CosmeticLibrary.Cosmetics then
+        return nil
+    end
+    
+    local base = CosmeticLibrary.Cosmetics[name]
+    if not base then return nil end
+    
+    local cosmetic = {}
+    for k, v in pairs(base) do
+        cosmetic[k] = v
+    end
+    
+    cosmetic.Name = name
+    cosmetic.Type = cosmetic.Type or cosmeticType
+    cosmetic.Seed = cosmetic.Seed or math.random(1, 1000000)
+    
+    if EnumLibrary and EnumLibrary.ToEnum then
+        local success, enumId = pcall(EnumLibrary.ToEnum, EnumLibrary, name)
+        if success and enumId then
+            cosmetic.Enum = enumId
+            cosmetic.ObjectID = cosmetic.ObjectID or enumId
+        end
+    end
+    
+    if options then
+        if options.inverted ~= nil then cosmetic.Inverted = options.inverted end
+        if options.favoritesOnly ~= nil then cosmetic.OnlyUseFavorites = options.favoritesOnly end
+    end
+    
+    return cosmetic
+end
+
+-- Configuration management
+local function stripForSave()
+    local data = {
+        equipped = {},
+        favorites = {}
+    }
+    
+    for weaponName, cosmetics in pairs(equippedCosmetics) do
+        data.equipped[weaponName] = {}
+        for cosType, cosmetic in pairs(cosmetics) do
+            if cosmetic and cosmetic.Name then
+                data.equipped[weaponName][cosType] = {
+                    Name = cosmetic.Name,
+                    Inverted = cosmetic.Inverted,
+                    OnlyUseFavorites = cosmetic.OnlyUseFavorites
+                }
+            end
+        end
+    end
+    
+    data.favorites = favoritedCosmetics
+    return data
+end
+
+local function loadConfig()
+    if not isfile or not readfile then return end
+    
+    local success, exists = pcall(isfile, CONFIG_FILE)
+    if not success or not exists then return end
+    
+    local success, raw = pcall(readfile, CONFIG_FILE)
+    if not success or not raw or raw == "" then return end
+    
+    local success, decoded = pcall(HttpService.JSONDecode, HttpService, raw)
+    if not success or not decoded then return end
+    
+    if decoded.favorites then
+        favoritedCosmetics = decoded.favorites
+    end
+    
+    if decoded.equipped then
+        equippedCosmetics = {}
+        for weaponName, cosmetics in pairs(decoded.equipped) do
+            equippedCosmetics[weaponName] = {}
+            for cosType, saveData in pairs(cosmetics) do
+                if saveData and saveData.Name then
+                    if CosmeticLibrary.Cosmetics[saveData.Name] then
+                        local cloned = createCosmetic(saveData.Name, cosType, {
+                            inverted = saveData.Inverted,
+                            favoritesOnly = saveData.OnlyUseFavorites
+                        })
+                        if cloned then
+                            equippedCosmetics[weaponName][cosType] = cloned
+                        end
+                    end
+                end
+            end
+            if not next(equippedCosmetics[weaponName]) then
+                equippedCosmetics[weaponName] = nil
+            end
+        end
+    end
+end
+
+local function saveConfig()
+    if not writefile or saveLock then return end
+    saveLock = true
+    
+    task.spawn(function()
+        task.wait(SAVE_DELAY)
+        local data = stripForSave()
+        local success, encoded = pcall(HttpService.JSONEncode, HttpService, data)
+        if success then
+            pcall(writefile, CONFIG_FILE, encoded)
+        end
+        saveLock = false
+    end)
+end
+
+-- CRITICAL: Force finisher detection
+local function forceFinisherDetection()
+    -- Get the current finisher for the weapon
+    local function getCurrentFinisher(weaponName)
+        weaponName = weaponName or "Global"
+        -- Check specific weapon
+        if equippedCosmetics[weaponName] and equippedCosmetics[weaponName].Finisher then
+            return equippedCosmetics[weaponName].Finisher
+        end
+        -- Check global finisher
+        if equippedCosmetics["Global"] and equippedCosmetics["Global"].Finisher then
+            return equippedCosmetics["Global"].Finisher
+        end
+        -- Check any weapon with finisher
+        for _, cos in pairs(equippedCosmetics) do
+            if cos.Finisher then
+                return cos.Finisher
+            end
+        end
+        return nil
+    end
+    
+    -- Get the fighter object
+    local function getFighter()
+        local success, fighter = pcall(FighterController.GetFighter, FighterController, LocalPlayer)
+        if success and fighter then
+            return fighter
+        end
+        return nil
+    end
+    
+    -- METHOD 1: Directly set finisher on all possible locations
+    local function directFinisherInjection()
+        local fighter = getFighter()
+        if not fighter then return false end
+        
+        local finisher = getCurrentFinisher()
+        if not finisher then return false end
+        
+        print("[SkinChanger] Directly injecting finisher:", finisher.Name)
+        
+        -- Try every possible property name
+        local propertyNames = {
+            "Finisher", "EquippedFinisher", "CurrentFinisher", "SelectedFinisher",
+            "Execution", "EquippedExecution", "FinisherCosmetic", "ExecutionCosmetic"
+        }
+        
+        local injected = false
+        for _, propName in ipairs(propertyNames) do
+            if fighter[propName] ~= nil then
+                fighter[propName] = finisher
+                injected = true
+            end
+        end
+        
+        -- Also try setting on fighter's Data
+        if fighter.Data then
+            fighter.Data.Finisher = finisher
+            fighter.Data.EquippedFinisher = finisher
+        end
+        
+        -- Try setting on fighter's CurrentWeapon
+        if fighter.CurrentWeapon then
+            fighter.CurrentWeapon.Finisher = finisher
+        end
+        
+        return injected
+    end
+    
+    -- METHOD 2: Hook the GetFinisher function
+    local function hookGetFinisher()
+        local fighter = getFighter()
+        if not fighter then return false end
+        
+        -- Hook GetFinisher method
+        if fighter.GetFinisher then
+            local original = fighter.GetFinisher
+            fighter.GetFinisher = function(self)
+                local weapon = currentWeapon or "Global"
+                local finisher = getCurrentFinisher(weapon)
+                if finisher then
+                    return finisher
+                end
+                return original(self)
+            end
+            print("[SkinChanger] Hooked GetFinisher method")
+            return true
+        end
+        return false
+    end
+    
+    -- METHOD 3: Hook __index to intercept finisher requests
+    local function hookIndex()
+        local fighter = getFighter()
+        if not fighter then return false end
+        
+        local mt = getmetatable(fighter)
+        if not mt then return false end
+        
+        local originalIndex = mt.__index
+        mt.__index = function(table, key)
+            if key == "Finisher" or key == "EquippedFinisher" or key == "CurrentFinisher" then
+                local weapon = currentWeapon or "Global"
+                local finisher = getCurrentFinisher(weapon)
+                if finisher then
+                    return finisher
+                end
+            end
+            if originalIndex then
+                return originalIndex(table, key)
+            end
+            return nil
+        end
+        print("[SkinChanger] Hooked fighter __index")
+        return true
+    end
+    
+    -- METHOD 4: Scan and patch all finisher-related functions
+    local function scanAndPatch()
+        local fighter = getFighter()
+        if not fighter then return false end
+        
+        local patched = false
+        for key, value in pairs(fighter) do
+            if type(value) == "function" then
+                local keyLower = key:lower()
+                if keyLower:find("finish") or keyLower:find("execut") or keyLower:find("elimin") then
+                    print("[SkinChanger] Found finisher function:", key)
+                    local original = value
+                    fighter[key] = function(self, ...)
+                        local weapon = currentWeapon or "Global"
+                        local finisher = getCurrentFinisher(weapon)
+                        if finisher then
+                            self.Finisher = finisher
+                            self.EquippedFinisher = finisher
+                        end
+                        return original(self, ...)
+                    end
+                    patched = true
+                end
+            end
+        end
+        return patched
+    end
+    
+    -- METHOD 5: Monitor execution requests from remotes
+    local function monitorExecutionRemotes()
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        if not remotes then return false end
+        
+        local replication = remotes:FindFirstChild("Replication")
+        if not replication then return false end
+        
+        local fighterRemote = replication:FindFirstChild("Fighter")
+        if not fighterRemote then return false end
+        
+        local patched = false
+        for _, child in ipairs(fighterRemote:GetChildren()) do
+            if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
+                local name = child.Name:lower()
+                if name:find("finish") or name:find("execut") or name:find("elimin") or name:find("kill") then
+                    print("[SkinChanger] Found execution remote:", child.Name)
+                    
+                    if child:IsA("RemoteEvent") then
+                        local originalFire = child.FireServer
+                        child.FireServer = function(self, ...)
+                            local args = {...}
+                            local weapon = currentWeapon or "Global"
+                            local finisher = getCurrentFinisher(weapon)
+                            
+                            if finisher then
+                                print("[SkinChanger] Intercepted execution remote, injecting finisher:", finisher.Name)
+                                -- Try to inject finisher into args
+                                if #args > 0 and type(args[1]) == "table" then
+                                    args[1].Finisher = finisher
+                                    args[1].EquippedFinisher = finisher
+                                end
+                                -- Also try to set as separate argument
+                                table.insert(args, finisher)
+                            end
+                            
+                            return originalFire(self, table.unpack(args))
+                        end
+                        patched = true
+                    elseif child:IsA("RemoteFunction") then
+                        local originalInvoke = child.InvokeServer
+                        child.InvokeServer = function(self, ...)
+                            local args = {...}
+                            local weapon = currentWeapon or "Global"
+                            local finisher = getCurrentFinisher(weapon)
+                            
+                            if finisher then
+                                print("[SkinChanger] Intercepted execution remote function, injecting finisher:", finisher.Name)
+                                if #args > 0 and type(args[1]) == "table" then
+                                    args[1].Finisher = finisher
+                                    args[1].EquippedFinisher = finisher
+                                end
+                                table.insert(args, finisher)
+                            end
+                            
+                            return originalInvoke(self, table.unpack(args))
+                        end
+                        patched = true
+                    end
+                end
+            end
+        end
+        return patched
+    end
+    
+    -- Run all methods
+    local methods = {
+        directFinisherInjection,
+        hookGetFinisher,
+        hookIndex,
+        scanAndPatch,
+        monitorExecutionRemotes
+    }
+    
+    local success = false
+    for _, method in ipairs(methods) do
+        local result = method()
+        if result then
+            success = true
+        end
+    end
+    
+    return success
+end
+
+-- Continuous finisher monitor
+local function startFinisherMonitor()
+    -- Monitor every second for finisher state
+    task.spawn(function()
+        while true do
+            task.wait(1)
+            if initialized then
+                local fighter = nil
+                local success = pcall(function()
+                    fighter = FighterController:GetFighter(LocalPlayer)
+                end)
+                
+                if success and fighter then
+                    -- Check if finisher is detected
+                    local currentFinisher = nil
+                    local propertiesToCheck = {"Finisher", "EquippedFinisher", "CurrentFinisher", "SelectedFinisher"}
+                    
+                    for _, prop in ipairs(propertiesToCheck) do
+                        if fighter[prop] then
+                            currentFinisher = fighter[prop]
+                            break
+                        end
+                    end
+                    
+                    -- If no finisher detected but we have one equipped, force inject
+                    if not currentFinisher then
+                        local weapon = currentWeapon or "Global"
+                        local equippedFinisher = nil
+                        
+                        if equippedCosmetics[weapon] and equippedCosmetics[weapon].Finisher then
+                            equippedFinisher = equippedCosmetics[weapon].Finisher
+                        elseif equippedCosmetics["Global"] and equippedCosmetics["Global"].Finisher then
+                            equippedFinisher = equippedCosmetics["Global"].Finisher
+                        end
+                        
+                        if equippedFinisher then
+                            print("[SkinChanger] Finisher not detected, re-injecting:", equippedFinisher.Name)
+                            fighter.Finisher = equippedFinisher
+                            fighter.EquippedFinisher = equippedFinisher
+                            if fighter.Data then
+                                fighter.Data.Finisher = equippedFinisher
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+-- Patch functions to unlock cosmetics
+local function patchCosmeticLibrary()
+    if not CosmeticLibrary then return end
+    
+    local isCosmeticType = function(cosmetic)
+        if not cosmetic then return false end
+        for _, typeName in ipairs(COSMETIC_TYPES) do
+            if cosmetic.Type == typeName then return true end
+        end
+        return false
+    end
+    
+    local originalOwns = CosmeticLibrary.OwnsCosmetic
+    
+    CosmeticLibrary.OwnsCosmeticNormally = function(self, inventory, name, weapon)
+        local cosmetic = CosmeticLibrary.Cosmetics[name]
+        if cosmetic and (cosmetic.Type == "Skin" or cosmetic.Type == "Finisher" or cosmetic.Type == "Execution") then 
+            return true 
+        end
+        return false
+    end
+    
+    CosmeticLibrary.OwnsCosmeticUniversally = function(self, inventory, name, weapon)
+        local cosmetic = CosmeticLibrary.Cosmetics[name]
+        if cosmetic and (cosmetic.Type == "Skin" or cosmetic.Type == "Finisher" or cosmetic.Type == "Execution") then 
+            return true 
+        end
+        return false
+    end
+    
+    CosmeticLibrary.OwnsCosmeticForWeapon = function(self, inventory, name, weapon)
+        local cosmetic = CosmeticLibrary.Cosmetics[name]
+        if cosmetic and (cosmetic.Type == "Skin" or cosmetic.Type == "Finisher" or cosmetic.Type == "Execution") then 
+            return true 
+        end
+        return false
+    end
+    
+    CosmeticLibrary.OwnsCosmetic = function(self, inventory, name, weapon)
+        if name:find("MISSING_") or name == "Bubble Gun" then
+            return originalOwns(self, inventory, name, weapon)
+        end
+        local cosmetic = CosmeticLibrary.Cosmetics[name]
+        if cosmetic and isCosmeticType(cosmetic) then
+            return true
+        end
+        return originalOwns(self, inventory, name, weapon)
+    end
+end
+
+-- Patch PlayerDataController
+local function patchPlayerDataController()
+    if not PlayerDataController then return end
+    
+    local originalGet = PlayerDataController.Get
+    
+    PlayerDataController.Get = function(self, key)
+        local value = originalGet(self, key)
+        
+        if key == "CosmeticInventory" then
+            local proxy = {}
+            if value then
+                for k, v in pairs(value) do
+                    local cosmetic = CosmeticLibrary.Cosmetics[k]
+                    if cosmetic and isCosmeticType(cosmetic) then
+                        proxy[k] = v
+                    end
+                end
+            end
+            return setmetatable(proxy, {
+                __index = function(t, k)
+                    local cosmetic = CosmeticLibrary.Cosmetics[k]
+                    if cosmetic and isCosmeticType(cosmetic) then
+                        return true
+                    end
+                    return nil
+                end
+            })
+        end
+        
+        if key == "FavoritedCosmetics" then
+            local result = value and table.clone(value) or {}
+            for weapon, favorites in pairs(favoritedCosmetics) do
+                result[weapon] = result[weapon] or {}
+                for name, isFavorited in pairs(favorites) do
+                    local cosmetic = CosmeticLibrary.Cosmetics[name]
+                    if cosmetic and isCosmeticType(cosmetic) then
+                        result[weapon][name] = isFavorited
+                    end
+                end
+            end
+            return result
+        end
+        
+        return value
+    end
+    
+    local originalGetWeapon = PlayerDataController.GetWeaponData
+    
+    PlayerDataController.GetWeaponData = function(self, weaponName)
+        local data = originalGetWeapon(self, weaponName)
+        if not data then return nil end
+        
+        local merged = {}
+        for k, v in pairs(data) do
+            merged[k] = v
+        end
+        merged.Name = weaponName
+        
+        if equippedCosmetics[weaponName] then
+            for cosType, cosmetic in pairs(equippedCosmetics[weaponName]) do
+                merged[cosType] = cosmetic
+            end
+        end
+        
+        return merged
+    end
+end
+
+-- Patch remote events
+local function patchRemotes()
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if not remotes then return end
+    
+    local dataRemote = remotes:FindFirstChild("Data")
+    local equipRemote = dataRemote and dataRemote:FindFirstChild("EquipCosmetic")
+    local favoriteRemote = dataRemote and dataRemote:FindFirstChild("FavoriteCosmetic")
+    local replicationRemote = remotes:FindFirstChild("Replication")
+    local fighterRemote = replicationRemote and replicationRemote:FindFirstChild("Fighter")
+    local useItemRemote = fighterRemote and fighterRemote:FindFirstChild("UseItem")
+    local finisherRemote = dataRemote and dataRemote:FindFirstChild("EquipFinisher")
+    
+    if not equipRemote then return end
+    
+    local originalMethod
+    originalMethod = hookmetamethod(game, "__namecall", function(self, ...)
+        if getnamecallmethod() ~= "FireServer" then
+            return originalMethod(self, ...)
+        end
+        
+        local args = {...}
+        
+        -- Handle UseItem
+        if useItemRemote and self == useItemRemote then
+            local objectId = args[1]
+            if FighterController and LocalPlayer then
+                pcall(function()
+                    local fighter = FighterController:GetFighter(LocalPlayer)
+                    if fighter and fighter.Items then
+                        for _, item in pairs(fighter.Items) do
+                            if item:Get("ObjectID") == objectId then
+                                currentWeapon = item.Name
+                                break
+                            end
+                        end
+                    end
+                end)
+            end
+        end
+        
+        -- Handle EquipCosmetic
+        if self == equipRemote then
+            local weaponName = args[1]
+            local cosType = args[2]
+            local cosName = args[3]
+            local options = args[4] or {}
+            
+            -- Special handling for finishers
+            if cosType == "Finisher" or cosType == "Execution" then
+                if cosName and cosName ~= "None" and cosName ~= "" then
+                    equippedCosmetics[weaponName] = equippedCosmetics[weaponName] or {}
+                    local cloned = createCosmetic(cosName, cosType, {
+                        inverted = options.IsInverted,
+                        favoritesOnly = options.OnlyUseFavorites
+                    })
+                    if cloned then
+                        equippedCosmetics[weaponName][cosType] = cloned
+                        selectedFinisher = cosName
+                        print("[SkinChanger] Finisher equipped:", cosName, "for", weaponName)
+                        -- Force inject immediately
+                        forceFinisherDetection()
+                    end
+                else
+                    if equippedCosmetics[weaponName] then
+                        equippedCosmetics[weaponName][cosType] = nil
+                        if not next(equippedCosmetics[weaponName]) then
+                            equippedCosmetics[weaponName] = nil
+                        end
+                    end
+                end
+                saveConfig()
+                return
+            end
+            
+            if cosName and cosName ~= "None" and cosName ~= "" then
+                local inventory = PlayerDataController:Get("CosmeticInventory")
+                if inventory and rawget(inventory, cosName) then
+                    return originalMethod(self, ...)
+                end
+            end
+            
+            equippedCosmetics[weaponName] = equippedCosmetics[weaponName] or {}
+            
+            if not cosName or cosName == "None" or cosName == "" then
+                equippedCosmetics[weaponName][cosType] = nil
+                if not next(equippedCosmetics[weaponName]) then
+                    equippedCosmetics[weaponName] = nil
+                end
+            else
+                local cloned = createCosmetic(cosName, cosType, {
+                    inverted = options.IsInverted,
+                    favoritesOnly = options.OnlyUseFavorites
+                })
+                if cloned then
+                    equippedCosmetics[weaponName][cosType] = cloned
+                end
+            end
+            
+            task.defer(function()
+                pcall(function()
+                    if PlayerDataController and PlayerDataController.CurrentData then
+                        PlayerDataController.CurrentData:Replicate("WeaponInventory")
+                    end
+                end)
+            end)
+            
+            saveConfig()
+            return
+        end
+        
+        -- Handle separate finisher remote
+        if finisherRemote and self == finisherRemote then
+            local weaponName = args[1]
+            local finisherName = args[2]
+            
+            if finisherName and finisherName ~= "None" and finisherName ~= "" then
+                equippedCosmetics[weaponName] = equippedCosmetics[weaponName] or {}
+                local cloned = createCosmetic(finisherName, "Finisher", {})
+                if cloned then
+                    equippedCosmetics[weaponName].Finisher = cloned
+                    selectedFinisher = finisherName
+                    print("[SkinChanger] Finisher equipped via remote:", finisherName)
+                    forceFinisherDetection()
+                end
+            else
+                if equippedCosmetics[weaponName] then
+                    equippedCosmetics[weaponName].Finisher = nil
+                end
+            end
+            saveConfig()
+            return
+        end
+        
+        -- Handle FavoriteCosmetic
+        if self == favoriteRemote then
+            local cosmetic = CosmeticLibrary.Cosmetics[args[2]]
+            if cosmetic then
+                favoritedCosmetics[args[1]] = favoritedCosmetics[args[1]] or {}
+                favoritedCosmetics[args[1]][args[2]] = args[3] or nil
+                
+                task.spawn(function()
+                    pcall(function()
+                        if PlayerDataController and PlayerDataController.CurrentData then
+                            PlayerDataController.CurrentData:Replicate("FavoritedCosmetics")
+                        end
+                    end)
+                end)
+                
+                saveConfig()
+            end
+            return
+        end
+        
+        return originalMethod(self, ...)
+    end)
+end
+
+-- Patch view model creation
+local function patchViewModel()
+    local clientItemModule = LocalPlayer.PlayerScripts:FindFirstChild("Modules")
+        and LocalPlayer.PlayerScripts.Modules:FindFirstChild("ClientReplicatedClasses")
+        and LocalPlayer.PlayerScripts.Modules.ClientReplicatedClasses:FindFirstChild("ClientFighter")
+        and LocalPlayer.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter:FindFirstChild("ClientItem")
+    
+    if not clientItemModule then return end
+    
+    local ClientItem = require(clientItemModule)
+    
+    if ClientItem and ClientItem._CreateViewModel then
+        local originalCreateViewModel = ClientItem._CreateViewModel
+        
+        ClientItem._CreateViewModel = function(self, viewModelRef)
+            local weaponName = self.Name
+            local weaponPlayer = self.ClientFighter and self.ClientFighter.Player
+            buildingWeapon = (weaponPlayer == LocalPlayer) and weaponName or nil
+            
+            if weaponPlayer == LocalPlayer and equippedCosmetics[weaponName] then
+                local dataKey = self:ToEnum("Data")
+                if viewModelRef[dataKey] then
+                    if equippedCosmetics[weaponName].Skin then
+                        viewModelRef[dataKey][self:ToEnum("Skin")] = equippedCosmetics[weaponName].Skin
+                        viewModelRef[dataKey][self:ToEnum("Name")] = equippedCosmetics[weaponName].Skin.Name
+                    end
+                    if equippedCosmetics[weaponName].Charm then
+                        viewModelRef[dataKey][self:ToEnum("Charm")] = equippedCosmetics[weaponName].Charm
+                    end
+                    if equippedCosmetics[weaponName].Wrap then
+                        viewModelRef[dataKey][self:ToEnum("Wrap")] = equippedCosmetics[weaponName].Wrap
+                    end
+                elseif viewModelRef.Data then
+                    if equippedCosmetics[weaponName].Skin then
+                        viewModelRef.Data.Skin = equippedCosmetics[weaponName].Skin
+                        viewModelRef.Data.Name = equippedCosmetics[weaponName].Skin.Name
+                    end
+                    if equippedCosmetics[weaponName].Charm then
+                        viewModelRef.Data.Charm = equippedCosmetics[weaponName].Charm
+                    end
+                    if equippedCosmetics[weaponName].Wrap then
+                        viewModelRef.Data.Wrap = equippedCosmetics[weaponName].Wrap
+                    end
+                end
+            end
+            
+            local result = originalCreateViewModel(self, viewModelRef)
+            buildingWeapon = nil
+            return result
+        end
+    end
+    
+    -- Patch ClientViewModel
+    local viewModelModule = clientItemModule:FindFirstChild("ClientViewModel")
+    if viewModelModule then
+        local ClientViewModel = require(viewModelModule)
+        local originalNew = ClientViewModel.new
+        
+        ClientViewModel.new = function(repData, clientItem)
+            local weaponPlayer = clientItem.ClientFighter and clientItem.ClientFighter.Player
+            local weaponName = buildingWeapon or clientItem.Name
+            
+            if weaponPlayer == LocalPlayer and equippedCosmetics[weaponName] then
+                local ReplicatedClass = require(ReplicatedStorage.Modules.ReplicatedClass)
+                local dataKey = ReplicatedClass:ToEnum("Data")
+                repData[dataKey] = repData[dataKey] or {}
+                
+                local cosmetics = equippedCosmetics[weaponName]
+                if cosmetics.Skin then
+                    repData[dataKey][ReplicatedClass:ToEnum("Skin")] = cosmetics.Skin
+                end
+                if cosmetics.Charm then
+                    repData[dataKey][ReplicatedClass:ToEnum("Charm")] = cosmetics.Charm
+                end
+                if cosmetics.Wrap then
+                    repData[dataKey][ReplicatedClass:ToEnum("Wrap")] = cosmetics.Wrap
+                end
+            end
+            
+            return originalNew(repData, clientItem)
+        end
+    end
+end
+
+-- Helper function to check cosmetic type
+local function isCosmeticType(cosmetic)
+    if not cosmetic then return false end
+    for _, typeName in ipairs(COSMETIC_TYPES) do
+        if cosmetic.Type == typeName then return true end
+    end
+    return false
+end
+
+-- Main initialization
+local function initialize()
+    if initialized then return end
+    
+    -- Wait for required services
+    repeat
+        task.wait()
+    until ReplicatedStorage:FindFirstChild("Modules") and LocalPlayer.PlayerScripts:FindFirstChild("Controllers")
+    
+    if not initializeModules() then
+        warn("Failed to initialize modules, retrying...")
+        task.wait(1)
+        return initialize()
+    end
+    
+    -- Load configuration
+    loadConfig()
+    
+    -- Apply patches
+    patchCosmeticLibrary()
+    patchPlayerDataController()
+    patchRemotes()
+    patchViewModel()
+    
+    -- Force finisher detection
+    task.wait(2) -- Wait for game to fully load
+    forceFinisherDetection()
+    startFinisherMonitor()
+    
+    initialized = true
+    print("[SkinChanger] ========================================")
+    print("[SkinChanger] Initialized successfully!")
+    print("[SkinChanger] Finisher detection forced!")
+    print("[SkinChanger] ========================================")
+    
+    -- Show current finisher status
+    task.wait(1)
+    local weapon = currentWeapon or "Global"
+    local finisher = equippedCosmetics[weapon] and equippedCosmetics[weapon].Finisher
+    if finisher then
+        print("[SkinChanger] Currently equipped finisher:", finisher.Name)
+    else
+        local globalFinisher = equippedCosmetics["Global"] and equippedCosmetics["Global"].Finisher
+        if globalFinisher then
+            print("[SkinChanger] Global finisher equipped:", globalFinisher.Name)
+        else
+            print("[SkinChanger] No finisher equipped. Equip one from the menu!")
+        end
+    end
+    
+    -- Setup hotkeys
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        
+        -- RightShift to save config
+        if input.KeyCode == Enum.KeyCode.RightShift then
+            print("[SkinChanger] Config saved!")
+            saveConfig()
+        end
+        
+        -- F to show current finisher status
+        if input.KeyCode == Enum.KeyCode.F then
+            local weapon = currentWeapon or "Global"
+            local finisher = equippedCosmetics[weapon] and equippedCosmetics[weapon].Finisher
+            if finisher then
+                print("[SkinChanger] Current finisher for", weapon, ":", finisher.Name)
+                -- Force inject again
+                forceFinisherDetection()
+                print("[SkinChanger] Finisher re-injected!")
+            else
+                print("[SkinChanger] No finisher equipped for", weapon)
+                -- Check global
+                local globalFinisher = equippedCosmetics["Global"] and equippedCosmetics["Global"].Finisher
+                if globalFinisher then
+                    print("[SkinChanger] Global finisher:", globalFinisher.Name)
+                end
+            end
+        end
+        
+        -- G to force apply finisher to current weapon
+        if input.KeyCode == Enum.KeyCode.G then
+            print("[SkinChanger] Force applying finisher...")
+            forceFinisherDetection()
+            print("[SkinChanger] Done!")
+        end
+    end)
+end
+
+-- Start the script
+task.spawn(initialize)
+
+-- Return API
+return {
+    getEquipped = function() return equippedCosmetics end,
+    getFavorites = function() return favoritedCosmetics end,
+    saveConfig = saveConfig,
+    loadConfig = loadConfig,
+    setCosmetic = function(weapon, cosType, cosName, options)
+        equippedCosmetics[weapon] = equippedCosmetics[weapon] or {}
+        local cloned = createCosmetic(cosName, cosType, options)
+        if cloned then
+            equippedCosmetics[weapon][cosType] = cloned
+            saveConfig()
+            if cosType == "Finisher" or cosType == "Execution" then
+                forceFinisherDetection()
+            end
+            return true
+        end
+        return false
+    end,
+    removeCosmetic = function(weapon, cosType)
+        if equippedCosmetics[weapon] then
+            equippedCosmetics[weapon][cosType] = nil
+            if not next(equippedCosmetics[weapon]) then
+                equippedCosmetics[weapon] = nil
+            end
+            saveConfig()
+            return true
+        end
+        return false
+    end,
+    setFinisher = function(weapon, finisherName)
+        local result = setCosmetic(weapon, "Finisher", finisherName)
+        if result then
+            forceFinisherDetection()
+        end
+        return result
+    end,
+    forceFinisher = forceFinisherDetection
+}
